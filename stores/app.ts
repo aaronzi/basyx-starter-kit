@@ -771,8 +771,7 @@ export const useAppStore = defineStore('app', {
         const services = (dockerComposeConfig.value as { services: Record<string, unknown> })
           .services;
         const aasEnvironment = services['aas-environment'] as
-          | { environment?: string[] }
-          | undefined;
+          { environment?: string[] } | undefined;
         if (aasEnvironment?.environment && Array.isArray(aasEnvironment.environment)) {
           setOrReplaceEnvVar(aasEnvironment.environment, 'GENERAL_EXTERNALURL', externalBaseUrl);
           this.setDockerComposeConfig(dockerComposeConfig);

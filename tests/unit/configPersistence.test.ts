@@ -71,8 +71,7 @@ describe('configPersistence', () => {
     const decoded = decodeConfigHash(encoded);
     const env = (
       (decoded.payload?.state.dockerComposeConfig?.value as Record<string, unknown>)?.services as
-        | Record<string, unknown>
-        | undefined
+        Record<string, unknown> | undefined
     )?.['aas-environment'] as Record<string, unknown> | undefined;
 
     const environment = (env?.environment || {}) as Record<string, string>;
@@ -107,8 +106,7 @@ describe('configPersistence', () => {
 
     const decoded = decodeConfigHash(encoded);
     const value = decoded.payload?.state.dockerComposeConfig?.value as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     expect(value?.attachment).toBeUndefined();
   });
 

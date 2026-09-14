@@ -1,0 +1,3 @@
+<template>
+  <StartPage />
+</template>

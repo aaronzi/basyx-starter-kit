@@ -255,7 +255,7 @@
         variant="tonal"
         color="primary"
         append-icon="mdi-arrow-right"
-        to="/get-started/behaviour/persistence"
+        to="/get-started/behaviour/runtime"
         >Next</v-btn
       >
     </v-card-actions>

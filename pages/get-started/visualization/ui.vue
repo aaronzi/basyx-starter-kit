@@ -10,81 +10,43 @@
       Docker environment variables.
     </p>
 
-    <v-alert color="alertCard" class="mt-8 mb-8">
-      <div class="font-weight-medium text-header mb-3">Setting overview</div>
-      <v-list bg-color="transparent" density="compact" class="py-0">
-        <v-list-item>
-          <template #title><v-kbd>ENDPOINT_CONFIG_AVAILABLE</v-kbd></template>
-          <template #subtitle>
-            Allow users to add, edit, and delete infrastructure endpoint definitions in the UI.
-          </template>
-        </v-list-item>
-        <v-list-item>
-          <template #title><v-kbd>ALLOW_EDITING</v-kbd></template>
-          <template #subtitle>Enable or disable AAS and Submodel editor capabilities.</template>
-        </v-list-item>
-        <v-list-item>
-          <template #title><v-kbd>ALLOW_UPLOADING</v-kbd></template>
-          <template #subtitle>Control whether users can upload AAS files through the UI.</template>
-        </v-list-item>
-        <v-list-item>
-          <template #title><v-kbd>ALLOW_LOGOUT</v-kbd></template>
-          <template #subtitle>
-            Show or hide logout behavior when authentication is configured.
-          </template>
-        </v-list-item>
-        <v-list-item>
-          <template #title><v-kbd>SM_VIEWER_EDITOR</v-kbd></template>
-          <template #subtitle
-            >Enable or disable the standalone Submodel Viewer and Editor.</template
-          >
-        </v-list-item>
-        <v-list-item>
-          <template #title><v-kbd>START_PAGE_ROUTE_NAME</v-kbd></template>
-          <template #subtitle
-            >Select the initial page such as <code>AASViewer</code> or
-            <code>AASEditor</code>.</template
-          >
-        </v-list-item>
-      </v-list>
-    </v-alert>
-
-    <v-divider class="mt-12 mb-8" />
-    <h2 class="text-header">Web UI Behavior</h2>
-    <v-alert color="primary" variant="outlined" class="bg-alertCard mt-8 mb-8">
-      <v-switch
-        v-model="endpointConfigAvailable"
-        color="primary"
-        label="ENDPOINT_CONFIG_AVAILABLE"
-        hide-details
-        @update:model-value="applyBehaviorSettings"
-      />
+    <v-divider class="mt-8 mb-8" />
+    <h2 class="text-header">What users can do</h2>
+    <v-alert color="primary" variant="outlined" class="bg-alertCard mt-4 mb-8">
       <v-switch
         v-model="allowEditing"
         color="primary"
-        label="ALLOW_EDITING"
-        hide-details
+        label="Allow AAS and Submodel editing"
+        hint="Enables editor actions in the Web UI; backend permissions still apply."
+        persistent-hint
         @update:model-value="applyBehaviorSettings"
       />
       <v-switch
         v-model="allowUploading"
         color="primary"
-        label="ALLOW_UPLOADING"
-        hide-details
-        @update:model-value="applyBehaviorSettings"
-      />
-      <v-switch
-        v-model="allowLogout"
-        color="primary"
-        label="ALLOW_LOGOUT"
-        hide-details
+        label="Allow AAS file uploads"
+        hint="Shows upload actions when the backend accepts AAS packages."
+        persistent-hint
         @update:model-value="applyBehaviorSettings"
       />
       <v-switch
         v-model="smViewerEditor"
         color="primary"
-        label="SM_VIEWER_EDITOR"
-        hide-details
+        label="Show standalone Submodel Viewer and Editor"
+        hint="Controls the separate Submodel workspace in the UI."
+        persistent-hint
+        @update:model-value="applyBehaviorSettings"
+      />
+    </v-alert>
+
+    <h2 class="text-header">Navigation and sign-in</h2>
+    <v-alert color="primary" variant="outlined" class="bg-alertCard mt-4 mb-8">
+      <v-switch
+        v-model="allowLogout"
+        color="primary"
+        label="Show logout action"
+        hint="Useful when an OIDC provider is configured."
+        persistent-hint
         @update:model-value="applyBehaviorSettings"
       />
       <v-select
@@ -92,11 +54,29 @@
         class="mt-6"
         variant="solo-filled"
         :items="['AASViewer', 'AASEditor']"
-        label="START_PAGE_ROUTE_NAME"
-        hide-details
+        label="Start page"
+        hint="AASViewer is a good default for browsing; AASEditor opens the editing view."
+        persistent-hint
         @update:model-value="applyBehaviorSettings"
       />
     </v-alert>
+
+    <v-expansion-panels class="mb-8">
+      <v-expansion-panel title="Expert: infrastructure endpoint management">
+        <v-expansion-panel-text>
+          <p class="text-normalText mb-3">
+            Let Web UI users add, change, or remove backend endpoint definitions at runtime. Leave
+            this off when the downloaded <code>basyx-infra.yml</code> should be authoritative.
+          </p>
+          <v-switch
+            v-model="endpointConfigAvailable"
+            color="primary"
+            label="Allow endpoint configuration in the UI"
+            @update:model-value="applyBehaviorSettings"
+          />
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
 
     <v-card-actions class="px-0 mb-8">
       <v-btn variant="tonal" prepend-icon="mdi-arrow-left" to="/get-started/behaviour/time-series"
@@ -190,19 +170,16 @@ function syncBehaviorSettingsFromCompose() {
 }
 
 function readInfluxTokenFromCompose(services: Record<string, DockerService>): string | undefined {
-  const influxService = services.influxdb;
-  if (!influxService?.environment) {
-    return undefined;
-  }
+  const influxService = services.influxdb || services.telegraf;
+  const key = services.influxdb ? 'DOCKER_INFLUXDB_INIT_ADMIN_TOKEN' : 'INFLUX_TOKEN';
+  if (!influxService?.environment) return undefined;
 
   if (Array.isArray(influxService.environment)) {
-    const entry = influxService.environment.find(item =>
-      item.startsWith('DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=')
-    );
+    const entry = influxService.environment.find(item => item.startsWith(`${key}=`));
     return entry ? entry.split('=').slice(1).join('=') : undefined;
   }
 
-  return influxService.environment.DOCKER_INFLUXDB_INIT_ADMIN_TOKEN;
+  return influxService.environment[key];
 }
 
 function ensureUIService() {

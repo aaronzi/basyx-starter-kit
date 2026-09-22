@@ -94,6 +94,36 @@ describe('DockerConfig', () => {
     );
   });
 
+  it('updates the AAS Environment tag when the Configuration Service tag changes', async () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    const wrapper = mount(DockerConfig, {
+      props: { serviceName: 'basyx_configuration' },
+      global: {
+        stubs: {
+          'v-slide-y-transition': { template: '<div><slot /></div>' },
+          'v-combobox': ComboboxStub,
+          'v-list-item': { template: '<div><slot name="append" /></div>' },
+          'v-chip': { template: '<span><slot /></span>' },
+          'v-divider': { template: '<hr />' },
+          'v-text-field': { template: '<input />' },
+        },
+      },
+    });
+
+    await flushPromises();
+    await wrapper.find('button.tag-update').trigger('click');
+    const services = (
+      store.getDockerComposeConfig?.value as {
+        services: Record<string, { image?: string }>;
+      }
+    ).services;
+    expect(services.basyx_configuration?.image).toBe(
+      'eclipsebasyx/basyxconfigurationservice-go:1.0.0-rc.2'
+    );
+    expect(services['aas-environment']?.image).toBe('eclipsebasyx/aasenvironment-go:1.0.0-rc.2');
+  });
+
   it('persists the AAS Environment context path and reapplies generated external URLs', async () => {
     const store = useAppStore();
     store.initializeStarterDefaults();

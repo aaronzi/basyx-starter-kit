@@ -6,12 +6,19 @@ This repository contains the source code for the BaSyx Starter Kit (Website). Th
 
 The AAS Starter Kit is a frontend only web application used to create a BaSyx setup.
 This setup can be downloaded as a zip file and contains all necessary files to start the BaSyx infrastructure.
-This includes a docker-compose file, component configuration files and Asset Administration Shell (AAS) files.
+This includes a Docker Compose file, UI infrastructure configuration and optional Asset
+Administration Shell (AAS) files. The generated runtime uses the combined BaSyx Go AAS Environment,
+the BaSyx Go Configuration Service and PostgreSQL.
 
 ## How to use
 
 Just follow the instructions on the website. It asks relevant questions to determine what services are needed and how to tailor them to your need. After the configuration is done, you can download the setup folder as a zip file.
 Make sure that you have Docker installed on your machine. If not, you can download it from [the Docker Website](https://www.docker.com/products/docker-desktop).
+
+The guided process covers BaSyx Go runtime and API limits, PostgreSQL, history and audit settings,
+eventing, logging, OpenTelemetry, UI integration and container settings. External dependencies such
+as an OpenTelemetry Collector, an event broker or an S3-compatible evidence store are referenced by
+the generated configuration but are not deployed by the Starter Kit.
 
 ## Local Development
 

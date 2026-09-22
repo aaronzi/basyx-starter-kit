@@ -42,6 +42,49 @@ describe('UI page', () => {
     setActivePinia(createPinia());
   });
 
+  it('uses the external Telegraf InfluxDB token when creating the UI service', () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    store.updateTimeSeriesData(true);
+    const config = store.getDockerComposeConfig;
+    const value = config?.value as {
+      services: Record<string, { environment?: string[] | Record<string, string> }>;
+    };
+    delete value.services['aas-ui'];
+    value.services.telegraf = {
+      environment: ['INFLUX_URL=https://influx.example.org', 'INFLUX_TOKEN=test-token'],
+    };
+    store.setDockerComposeConfig({ name: 'docker-compose.yml', value });
+
+    mount(UIPage, {
+      global: {
+        stubs: {
+          'v-container': { template: '<div><slot /></div>' },
+          'v-breadcrumbs': { template: '<div />' },
+          'v-alert': { template: '<div><slot /></div>' },
+          'v-row': { template: '<div><slot /></div>' },
+          'v-col': { template: '<div><slot /></div>' },
+          'v-icon': { template: '<i />' },
+          'v-kbd': { template: '<kbd><slot /></kbd>' },
+          'v-list': { template: '<div><slot /></div>' },
+          'v-list-item': { template: '<div><slot /></div>' },
+          'v-divider': { template: '<hr />' },
+          'v-expansion-panels': { template: '<div><slot /></div>' },
+          'v-expansion-panel': { template: '<section><slot /></section>' },
+          'v-expansion-panel-text': { template: '<div><slot /></div>' },
+          'v-switch': SwitchStub,
+          'v-select': SelectStub,
+          'v-card-actions': { template: '<div><slot /></div>' },
+          'v-btn': { template: '<button><slot /></button>' },
+          'v-spacer': { template: '<span />' },
+        },
+      },
+    });
+
+    const ui = (store.getDockerComposeConfig?.value as typeof value).services['aas-ui'];
+    expect(ui?.environment).toHaveProperty('INFLUXDB_TOKEN', 'test-token');
+  });
+
   it('reflects late docker-compose hydration updates while page is open', async () => {
     const store = useAppStore();
     store.initializeStarterDefaults();
@@ -60,6 +103,9 @@ describe('UI page', () => {
           'v-list': { template: '<div><slot /></div>' },
           'v-list-item': { template: '<div><slot /><slot name="subtitle" /></div>' },
           'v-divider': { template: '<hr />' },
+          'v-expansion-panels': { template: '<div><slot /></div>' },
+          'v-expansion-panel': { template: '<section><slot /></section>' },
+          'v-expansion-panel-text': { template: '<div><slot /></div>' },
           'v-switch': SwitchStub,
           'v-select': SelectStub,
           'v-card-actions': { template: '<div><slot /></div>' },
@@ -94,11 +140,11 @@ describe('UI page', () => {
       .findAll('.switch-stub')
       .map(node => `${node.attributes('data-label')}:${node.text().trim()}`);
     expect(switchValues).toEqual([
-      'ENDPOINT_CONFIG_AVAILABLE:true',
-      'ALLOW_EDITING:false',
-      'ALLOW_UPLOADING:false',
-      'ALLOW_LOGOUT:false',
-      'SM_VIEWER_EDITOR:false',
+      'Allow AAS and Submodel editing:false',
+      'Allow AAS file uploads:false',
+      'Show standalone Submodel Viewer and Editor:false',
+      'Show logout action:false',
+      'Allow endpoint configuration in the UI:true',
     ]);
     expect(wrapper.find('.select-stub').text().trim()).toBe('AASEditor');
   });

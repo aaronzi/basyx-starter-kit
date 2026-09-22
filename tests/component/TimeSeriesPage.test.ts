@@ -1,187 +1,101 @@
 import { mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { vi } from 'vitest';
-import { createSSRApp, defineComponent, h, nextTick } from 'vue';
-import { renderToString } from 'vue/server-renderer';
+import { defineComponent, nextTick } from 'vue';
 import TimeSeriesPage from '@/pages/get-started/behaviour/time-series.vue';
 import { useAppStore } from '@/stores/app';
 
 vi.stubGlobal('useSeoMeta', vi.fn());
+vi.stubGlobal('navigateTo', vi.fn());
 
-const TextFieldStub = defineComponent({
-  name: 'TextFieldStub',
-  props: {
-    modelValue: {
-      type: String,
-      default: '',
-    },
-    label: {
-      type: String,
-      default: '',
-    },
-  },
+const FieldStub = defineComponent({
+  props: { modelValue: { type: String, default: '' }, label: { type: String, default: '' } },
   emits: ['update:modelValue'],
   template:
-    '<input class="field" :data-label="label" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+    '<input :data-label="label" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
 });
-
-const ssrStubs = {
-  ClientOnly: defineComponent({ template: '<div><slot /></div>' }),
-  'v-container': defineComponent({ template: '<div><slot /></div>' }),
-  'v-breadcrumbs': defineComponent({ template: '<div />' }),
-  'v-alert': defineComponent({ template: '<div><slot /></div>' }),
-  'v-radio-group': defineComponent({ template: '<div><slot /></div>' }),
-  'v-radio': defineComponent({ template: '<div />' }),
-  'v-slide-y-transition': defineComponent({ template: '<div><slot /></div>' }),
-  'v-divider': defineComponent({ template: '<hr />' }),
-  'v-row': defineComponent({ template: '<div><slot /></div>' }),
-  'v-col': defineComponent({ template: '<div><slot /></div>' }),
-  'v-icon': defineComponent({ template: '<i />' }),
-  'v-kbd': defineComponent({ template: '<kbd><slot /></kbd>' }),
-  'v-text-field': TextFieldStub,
-  'v-file-input': defineComponent({ template: '<div />' }),
-  'v-card-actions': defineComponent({ template: '<div><slot /></div>' }),
-  'v-btn': defineComponent({ template: '<button><slot /></button>' }),
-  'v-spacer': defineComponent({ template: '<span />' }),
+const SwitchStub = defineComponent({
+  props: { modelValue: { type: Boolean, default: false }, label: { type: String, default: '' } },
+  emits: ['update:modelValue'],
+  template:
+    '<input type="checkbox" :data-label="label" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
+});
+const stubs = {
+  'v-container': { template: '<div><slot /></div>' },
+  'v-breadcrumbs': { template: '<div />' },
+  'v-alert': { template: '<div><slot /></div>' },
+  'v-row': { template: '<div><slot /></div>' },
+  'v-col': { template: '<div><slot /></div>' },
+  'v-icon': { template: '<i />' },
+  'v-kbd': { template: '<kbd><slot /></kbd>' },
+  'v-divider': { template: '<hr />' },
+  'v-slide-y-transition': { template: '<div><slot /></div>' },
+  'v-radio-group': { template: '<div><slot /></div>' },
+  'v-radio': { template: '<div />' },
+  'v-file-input': { template: '<div />' },
+  TelegrafConfigEditor: { template: '<div />' },
+  'v-text-field': FieldStub,
+  'v-switch': SwitchStub,
+  'v-btn': { template: '<button @click="$emit(\'click\')"><slot /></button>' },
+  'v-card-actions': { template: '<div><slot /></div>' },
+  'v-spacer': { template: '<span />' },
 };
 
-function readEnvValue(environment: string[], key: string): string | undefined {
-  const entry = environment.find(item => item.startsWith(`${key}=`));
-  return entry ? entry.split('=').slice(1).join('=') : undefined;
+function services(store: ReturnType<typeof useAppStore>) {
+  return (
+    store.getDockerComposeConfig?.value as {
+      services: Record<string, { environment?: string[]; depends_on?: string[] }>;
+    }
+  ).services;
 }
 
 describe('Time Series page', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia());
-  });
+  beforeEach(() => setActivePinia(createPinia()));
 
-  it('reflects late store hydration updates while page is already open', async () => {
-    const store = useAppStore();
-    store.initializeStarterDefaults();
-    store.updateTimeSeriesData(false);
-
-    const wrapper = mount(TimeSeriesPage, {
-      global: {
-        stubs: {
-          ClientOnly: { template: '<div><slot /></div>' },
-          'v-container': { template: '<div><slot /></div>' },
-          'v-breadcrumbs': { template: '<div />' },
-          'v-alert': { template: '<div><slot /></div>' },
-          'v-radio-group': { template: '<div><slot /></div>' },
-          'v-radio': { template: '<div />' },
-          'v-slide-y-transition': { template: '<div><slot /></div>' },
-          'v-divider': { template: '<hr />' },
-          'v-row': { template: '<div><slot /></div>' },
-          'v-col': { template: '<div><slot /></div>' },
-          'v-icon': { template: '<i />' },
-          'v-kbd': { template: '<kbd><slot /></kbd>' },
-          'v-text-field': TextFieldStub,
-          'v-file-input': { template: '<div />' },
-          'v-card-actions': { template: '<div><slot /></div>' },
-          'v-btn': { template: '<button @click="$emit(\'click\')"><slot /></button>' },
-          'v-spacer': { template: '<span />' },
-        },
-      },
-    });
-
-    expect(wrapper.text()).not.toContain('Metrics Collection');
-
-    store.updateTimeSeriesData(true);
-    await nextTick();
-    await nextTick();
-
-    expect(wrapper.text()).toContain('Metrics Collection');
-  });
-
-  it('applies influx settings and syncs token to AAS UI', async () => {
+  it('creates local services and an editable starter file, then connects externally without a local InfluxDB', async () => {
     const store = useAppStore();
     store.initializeStarterDefaults();
     store.updateTimeSeriesData(true);
-
-    const wrapper = mount(TimeSeriesPage, {
-      global: {
-        stubs: {
-          ClientOnly: { template: '<div><slot /></div>' },
-          'v-container': { template: '<div><slot /></div>' },
-          'v-breadcrumbs': { template: '<div />' },
-          'v-alert': { template: '<div><slot /></div>' },
-          'v-radio-group': { template: '<div><slot /></div>' },
-          'v-radio': { template: '<div />' },
-          'v-slide-y-transition': { template: '<div><slot /></div>' },
-          'v-divider': { template: '<hr />' },
-          'v-row': { template: '<div><slot /></div>' },
-          'v-col': { template: '<div><slot /></div>' },
-          'v-icon': { template: '<i />' },
-          'v-kbd': { template: '<kbd><slot /></kbd>' },
-          'v-text-field': TextFieldStub,
-          'v-file-input': { template: '<div />' },
-          'v-card-actions': { template: '<div><slot /></div>' },
-          'v-btn': { template: '<button @click="$emit(\'click\')"><slot /></button>' },
-          'v-spacer': { template: '<span />' },
-        },
-      },
-    });
-
+    const wrapper = mount(TimeSeriesPage, { global: { stubs } });
     await nextTick();
+    expect(services(store).influxdb).toBeDefined();
+    expect(services(store).telegraf?.depends_on).toEqual(['influxdb']);
+    expect((await store.getTelegrafConf?.text()) || '').toContain('${INFLUX_TOKEN}');
 
-    await wrapper.find('input[data-label="DOCKER_INFLUXDB_INIT_ORG"]').setValue('demo-org');
-    await wrapper.find('input[data-label="DOCKER_INFLUXDB_INIT_BUCKET"]').setValue('demo-bucket');
+    await wrapper.find('input[data-label="Include local InfluxDB container"]').setValue(false);
+    expect(services(store).influxdb).toBeUndefined();
+    expect(services(store).telegraf?.depends_on).toBeUndefined();
+    expect(store.getBasyxConfig.some(item => item.id === 'comp-influxdb')).toBe(false);
+
     await wrapper
-      .find('input[data-label="DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"]')
-      .setValue('demo-token-123');
-
+      .find('input[data-label="InfluxDB URL for Telegraf"]')
+      .setValue('https://influx.example.org');
+    await wrapper
+      .find('input[data-label="External InfluxDB API token"]')
+      .setValue('external-token');
     await wrapper
       .findAll('button')
-      .find(button => button.text().includes('Apply InfluxDB Settings'))
+      .find(button => button.text().includes('Next'))
       ?.trigger('click');
     await nextTick();
-
-    const compose = store.getDockerComposeConfig?.value as {
-      services: Record<string, { environment?: string[] | Record<string, string> }>;
-    };
-    const influx = compose.services.influxdb;
-    const aasUi = compose.services['aas-ui'];
-
-    if (!influx || !Array.isArray(influx.environment)) {
-      throw new Error('Expected influxdb service with array environment variables.');
-    }
-    if (!aasUi || !aasUi.environment || Array.isArray(aasUi.environment)) {
-      throw new Error('Expected aas-ui service with object environment variables.');
-    }
-
-    expect(readEnvValue(influx.environment, 'DOCKER_INFLUXDB_INIT_ORG')).toBe('demo-org');
-    expect(readEnvValue(influx.environment, 'DOCKER_INFLUXDB_INIT_BUCKET')).toBe('demo-bucket');
-    expect(readEnvValue(influx.environment, 'DOCKER_INFLUXDB_INIT_ADMIN_TOKEN')).toBe(
-      'demo-token-123'
+    expect(services(store).telegraf?.environment).toContain(
+      'INFLUX_URL=https://influx.example.org'
     );
-    expect(aasUi.environment.INFLUXDB_TOKEN).toBe('demo-token-123');
-  });
+    expect(services(store).telegraf?.environment).toContain('INFLUX_TOKEN=external-token');
+    expect(navigateTo).toHaveBeenCalledWith('/get-started/visualization/ui');
 
-  it('does not generate a random token during SSR render', async () => {
-    const cryptoMock = {
-      getRandomValues: vi.fn(() => {
-        throw new Error('Token generation must not happen during SSR.');
-      }),
-    };
-    vi.stubGlobal('crypto', cryptoMock);
+    wrapper.unmount();
+    const restored = mount(TimeSeriesPage, { global: { stubs } });
+    await nextTick();
+    expect(services(store).influxdb).toBeUndefined();
+    expect(restored.find('input[data-label="InfluxDB URL for Telegraf"]').element).toHaveProperty(
+      'value',
+      'https://influx.example.org'
+    );
+    expect(services(store).telegraf?.environment).toContain('INFLUX_TOKEN=external-token');
 
-    const pinia = createPinia();
-    setActivePinia(pinia);
-    const store = useAppStore();
-    store.initializeStarterDefaults();
-    store.updateTimeSeriesData(true);
-
-    const app = createSSRApp({
-      render: () => h(TimeSeriesPage),
-    });
-    app.use(pinia);
-    Object.entries(ssrStubs).forEach(([name, component]) => {
-      app.component(name, component);
-    });
-
-    const html = await renderToString(app);
-
-    expect(cryptoMock.getRandomValues).not.toHaveBeenCalled();
-    expect(html).toContain('data-label="DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"');
+    await restored.find('input[data-label="Include local InfluxDB container"]').setValue(true);
+    expect(services(store).influxdb).toBeDefined();
+    expect(services(store).telegraf?.depends_on).toEqual(['influxdb']);
   });
 });

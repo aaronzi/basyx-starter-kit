@@ -95,4 +95,8 @@ function acceptConsent(consent: boolean) {
 div.v-switch__track {
   background-color: #424242 !important;
 }
+
+.setup-config-panels .v-expansion-panel-text__wrapper {
+  padding-inline: 16px;
+}
 </style>

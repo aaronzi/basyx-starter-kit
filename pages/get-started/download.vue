@@ -82,7 +82,10 @@
 import JSZip from 'jszip';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useAppStore } from '@/stores/app';
+import { readServiceEnvironment } from '@/utils/dockerEnvironment';
+import { getComposeServices } from '@/utils/optionalServices';
 import { generateRsaPrivateKeyPem } from '@/utils/rsaKey';
+import { addOptionalSetupAssets } from '@/utils/setupAssets';
 import { createSetupReadme } from '@/utils/setupReadme';
 import { buildShareConfigUrl } from '@/utils/shareConfig';
 
@@ -141,6 +144,49 @@ function createReadme(): void {
 
 async function downloadAsZip(): Promise<void> {
   downloadError.value = '';
+  const composeServices = getComposeServices() || {};
+  const composeEnvironment = readServiceEnvironment(appStore.getDockerComposeConfig?.value);
+  if (!composeServices.db && !composeEnvironment.POSTGRES_PASSWORD?.trim()) {
+    downloadError.value =
+      'Enter the external PostgreSQL password on the Persistence Backend page before downloading.';
+    return;
+  }
+  if (
+    composeEnvironment.BASYX_EVENTING_SINKS?.split(',').includes('amqp') &&
+    !composeServices.rabbitmq &&
+    composeEnvironment.BASYX_EVENTING_AMQP_USERNAME?.trim() &&
+    !composeEnvironment.BASYX_EVENTING_AMQP_PASSWORD
+  ) {
+    downloadError.value =
+      'Enter the external AMQP password on the Eventing page before downloading, or clear the username for anonymous access.';
+    return;
+  }
+  if (isTimeSeriesDataEnabled.value && !telegrafConfigStore.value) {
+    downloadError.value =
+      'Configure a valid Telegraf TOML file on the Time Series Data page before downloading.';
+    return;
+  }
+  if (isTimeSeriesDataEnabled.value) {
+    const value = appStore.getDockerComposeConfig?.value;
+    if (value && typeof value === 'object' && 'services' in value) {
+      const services = value.services as Record<
+        string,
+        { environment?: string[] | Record<string, string> }
+      >;
+      if (!services.influxdb) {
+        const env = services.telegraf?.environment;
+        const read = (key: string) =>
+          Array.isArray(env)
+            ? env.find(item => item.startsWith(`${key}=`))?.slice(key.length + 1)
+            : env?.[key];
+        if (!read('INFLUX_URL')?.trim() || !read('INFLUX_TOKEN')?.trim()) {
+          downloadError.value =
+            'Enter the external InfluxDB URL and API token on the Time Series Data page before downloading.';
+          return;
+        }
+      }
+    }
+  }
 
   try {
     const privateKeyPem = await generateRsaPrivateKeyPem();
@@ -155,11 +201,34 @@ async function downloadAsZip(): Promise<void> {
 
     const basyxFolder = zip.folder('basyx');
     basyxFolder?.file('rsa-key.pem', privateKeyPem);
+    const services = getComposeServices() || {};
+    const environment = readServiceEnvironment(appStore.getDockerComposeConfig?.value);
+    const infraValue = appStore.getBasyxInfraConfig?.value as
+      { infrastructures?: Record<string, unknown> } | undefined;
+    const infrastructures = infraValue?.infrastructures;
+    const selectedInfra = infrastructures?.[String(infrastructures.default)] as
+      { security?: { config?: { clientId?: string } } } | undefined;
+    const passwordBytes =
+      services.keycloak && environment.ABAC_ENABLED === 'true'
+        ? crypto.getRandomValues(new Uint8Array(18))
+        : undefined;
+    const adminPassword = passwordBytes
+      ? Array.from(passwordBytes, byte => byte.toString(16).padStart(2, '0')).join('')
+      : undefined;
+    const supplementalReadme = addOptionalSetupAssets(zip, {
+      services,
+      environment,
+      policyJson: appStore.accessPolicyJson,
+      trustListJson: appStore.trustListJson,
+      uiUrl: appStore.getAasWebUiExternalUrl,
+      uiClientId: selectedInfra?.security?.config?.clientId || 'basyx-ui',
+      adminPassword,
+    });
 
     if (isTimeSeriesDataEnabled.value) {
       const telegrafFolder = zip.folder('telegraf');
       if (telegrafConfigStore.value) {
-        telegrafFolder?.file(telegrafConfigStore.value.name, telegrafConfigStore.value);
+        telegrafFolder?.file('telegraf.conf', telegrafConfigStore.value);
       }
     }
 
@@ -186,7 +255,7 @@ async function downloadAsZip(): Promise<void> {
       zip.file('basyx-infra.yml', basyxInfraConfig);
     }
 
-    zip.file('README.md', readmeFile.value);
+    zip.file('README.md', readmeFile.value + supplementalReadme);
 
     const content = await zip.generateAsync({ type: 'blob' });
     const a = document.createElement('a');

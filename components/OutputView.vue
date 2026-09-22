@@ -299,6 +299,10 @@ function getTreeIcon(item: TreeItem): string {
       return 'mdi-server-network-outline';
     case 'ovw-aas-environment-integrations':
       return 'mdi-link-variant';
+    case 'ovw-aas-environment-history':
+      return 'mdi-history';
+    case 'ovw-aas-environment-observability':
+      return 'mdi-chart-timeline-variant-shimmer';
     case 'ovw-aas-environment-security':
       return 'mdi-shield-lock-outline';
     case 'ovw-postgres-summary':
@@ -464,14 +468,54 @@ function buildAasEnvironmentSummary(nodeId: string): SummaryPayload {
     ],
   };
 
+  const historySection: SummarySection = {
+    id: 'aas-env-history',
+    title: 'History & Audit',
+    icon: 'mdi-history',
+    entries: [
+      { key: 'Mode', value: env.BASYX_HISTORY_MODE || 'off' },
+      { key: 'Snapshots', value: env.BASYX_HISTORY_FULL_SNAPSHOT_INTERVAL || '1' },
+      { key: 'Immutability', value: env.BASYX_HISTORY_IMMUTABILITY || 'none' },
+      { key: 'Audit identity', value: env.BASYX_AUDIT_IDENTITY_MODE || 'none' },
+      {
+        key: 'WORM evidence',
+        value: boolChip(env.BASYX_HISTORY_EVIDENCE_ENABLED).value,
+        color: boolChip(env.BASYX_HISTORY_EVIDENCE_ENABLED).color,
+      },
+    ],
+  };
+
+  const observabilitySection: SummarySection = {
+    id: 'aas-env-observability',
+    title: 'Logging & OpenTelemetry',
+    icon: 'mdi-chart-timeline-variant-shimmer',
+    entries: [
+      { key: 'Log format', value: env.LOGGING_FORMAT || 'text' },
+      { key: 'Log level', value: env.LOGGING_LEVEL || 'info' },
+      { key: 'Trace exporter', value: env.OTEL_TRACES_EXPORTER || 'none' },
+      { key: 'Metrics exporter', value: env.OTEL_METRICS_EXPORTER || 'none' },
+      { key: 'OTLP endpoint', value: env.OTEL_EXPORTER_OTLP_ENDPOINT || 'n/a' },
+    ],
+  };
+
   const sections =
     nodeId === 'ovw-aas-environment-integrations'
       ? [integrationSection]
       : nodeId === 'ovw-aas-environment-security'
         ? [securitySection]
-        : nodeId === 'ovw-aas-environment-summary'
-          ? [runtimeSection]
-          : [runtimeSection, integrationSection, securitySection];
+        : nodeId === 'ovw-aas-environment-history'
+          ? [historySection]
+          : nodeId === 'ovw-aas-environment-observability'
+            ? [observabilitySection]
+            : nodeId === 'ovw-aas-environment-summary'
+              ? [runtimeSection]
+              : [
+                  runtimeSection,
+                  integrationSection,
+                  securitySection,
+                  historySection,
+                  observabilitySection,
+                ];
 
   return {
     icon: 'mdi-server-outline',

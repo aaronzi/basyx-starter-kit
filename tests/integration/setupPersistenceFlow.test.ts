@@ -17,6 +17,14 @@ describe('starter setup + persistence flow', () => {
     expect(compose?.services?.['aas-environment']).toBeTruthy();
     expect(compose?.services?.['aas-ui']).toBeTruthy();
     expect(infra?.infrastructures?.default).toBeTruthy();
+
+    const environment = (
+      compose?.services?.['aas-environment'] as { environment?: string[] } | undefined
+    )?.environment;
+    expect(environment).toContain('CORS_ALLOWCREDENTIALS=true');
+    expect(environment).toContain('BASYX_HISTORY_MODE=off');
+    expect(environment).toContain('BASYX_EVENTING_ENABLED=false');
+    expect(environment).toContain('OTEL_TRACES_EXPORTER=none');
   });
 
   it('uses a custom external base url for generated browser-facing endpoints', () => {

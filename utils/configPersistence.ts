@@ -8,7 +8,8 @@ export const CONFIG_QUERY_KEY = CONFIG_HASH_KEY;
 export const CONFIG_HASH_VERSION = 'v1';
 export const CONFIG_URL_WARNING_LENGTH = 6000;
 
-const SENSITIVE_KEY_PATTERN = /(password|token|secret|private.?key|api[-_]?key|credential)/i;
+const SENSITIVE_KEY_PATTERN =
+  /(password|(?:^|[_-])pass(?:$|[_-])|token|secret|private.?key|api[-_]?key|credential)/i;
 
 export interface PersistedConfigPayloadV1 {
   route: string;

@@ -14,6 +14,7 @@ import {
   replaceExplicitUrlPort,
   replaceUrlPath,
 } from '@/utils/externalUrls';
+import { DEFAULT_POLICY, defaultTrustList } from '@/utils/securitySetup';
 
 interface ContainerPort {
   id: string;
@@ -52,6 +53,8 @@ interface DockerComposeService {
   environment?: Record<string, string> | string[];
 }
 
+type Environment = Record<string, string> | string[];
+
 export interface SerializableStarterState {
   registryIntegration: boolean;
   discoveryIntegration: boolean;
@@ -88,6 +91,14 @@ function isConfigObject(value: unknown): value is ConfigObject {
     typeof config.value === 'string' ||
     (typeof config.value === 'object' && config.value !== null);
   return hasValidName && hasValidValue;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every(item => typeof item === 'string');
 }
 
 function isContainerPortArray(value: unknown): value is ContainerPort[] {
@@ -134,11 +145,17 @@ function isBasyxConfigArray(value: unknown): value is BasyxConfigItem[] {
     Array.isArray(value) &&
     value.every(
       item =>
-        item &&
-        typeof item === 'object' &&
+        isRecord(item) &&
         typeof item.id === 'string' &&
         typeof item.title === 'string' &&
-        Array.isArray(item.children)
+        Array.isArray(item.children) &&
+        item.children.every(
+          (child: unknown) =>
+            isRecord(child) &&
+            typeof child.id === 'string' &&
+            typeof child.title === 'string' &&
+            typeof child.type === 'string'
+        )
     )
   );
 }
@@ -151,6 +168,267 @@ function setOrReplaceEnvVar(env: string[], key: string, value: string): void {
   } else {
     env.push(`${key}=${value}`);
   }
+}
+
+function setEnvironmentValue(environment: Environment, key: string, value: string): void {
+  if (Array.isArray(environment)) {
+    setOrReplaceEnvVar(environment, key, value);
+  } else {
+    environment[key] = value;
+  }
+}
+
+function removeEnvironmentKeys(environment: Environment, keys: string[]): Environment {
+  if (Array.isArray(environment)) {
+    return environment.filter(entry => !keys.includes(entry.split('=')[0] || ''));
+  }
+
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => !keys.includes(key)));
+}
+
+function mergeEnvironmentDefaults(
+  defaults: Environment | undefined,
+  existing: Environment | undefined
+): Environment | undefined {
+  if (!existing) {
+    return defaults ? cloneSerializable(defaults) : undefined;
+  }
+  if (!defaults) {
+    return existing;
+  }
+
+  if (Array.isArray(existing)) {
+    const merged = [...existing];
+    const existingKeys = new Set(
+      existing.map(entry => entry.slice(0, entry.indexOf('='))).filter(Boolean)
+    );
+    const defaultEntries = Array.isArray(defaults)
+      ? defaults
+      : Object.entries(defaults).map(([key, value]) => `${key}=${value}`);
+    defaultEntries.forEach(entry => {
+      const separator = entry.indexOf('=');
+      const key = separator >= 0 ? entry.slice(0, separator) : entry;
+      if (key && !existingKeys.has(key)) {
+        merged.push(entry);
+        existingKeys.add(key);
+      }
+    });
+    return merged;
+  }
+
+  const merged = { ...existing };
+  const defaultEntries = Array.isArray(defaults) ? readEnvironmentEntries(defaults) : defaults;
+  Object.entries(defaultEntries).forEach(([key, value]) => {
+    if (!(key in merged)) {
+      merged[key] = value;
+    }
+  });
+  return merged;
+}
+
+function readEnvironmentEntries(environment: string[]): Record<string, string> {
+  return environment.reduce<Record<string, string>>((result, entry) => {
+    const separator = entry.indexOf('=');
+    if (separator >= 0) {
+      result[entry.slice(0, separator)] = entry.slice(separator + 1);
+    }
+    return result;
+  }, {});
+}
+
+const BASYX_GO_IMAGE_REPOSITORIES = {
+  'aas-environment': 'eclipsebasyx/aasenvironment-go',
+  basyx_configuration: 'eclipsebasyx/basyxconfigurationservice-go',
+} as const;
+
+type BasyxGoServiceName = keyof typeof BASYX_GO_IMAGE_REPOSITORIES;
+
+function getBasyxGoImageTag(
+  config: ConfigObject | undefined,
+  serviceName: BasyxGoServiceName
+): string {
+  if (!config || !isRecord(config.value) || !isRecord(config.value.services)) return '';
+  const service = config.value.services[serviceName];
+  if (!isRecord(service) || typeof service.image !== 'string') return '';
+  const separator = service.image.lastIndexOf(':');
+  return separator > service.image.lastIndexOf('/') ? service.image.slice(separator + 1) : '';
+}
+
+function syncBasyxGoImageTag(config: ConfigObject, source: BasyxGoServiceName): ConfigObject {
+  const updated = cloneSerializable(config);
+  if (!isRecord(updated.value) || !isRecord(updated.value.services)) return updated;
+  const services = updated.value.services;
+  const tag = getBasyxGoImageTag(updated, source);
+  if (!tag) return updated;
+
+  for (const [name, repository] of Object.entries(BASYX_GO_IMAGE_REPOSITORIES)) {
+    const service = services[name];
+    if (!isRecord(service)) continue;
+    const image = typeof service.image === 'string' ? service.image : '';
+    const separator = image.lastIndexOf(':');
+    const existingRepository =
+      separator > image.lastIndexOf('/') ? image.slice(0, separator) : image;
+    service.image = `${existingRepository || repository}:${tag}`;
+  }
+  return updated;
+}
+
+function mergeDockerComposeConfig(defaults: ConfigObject, existing: ConfigObject): ConfigObject {
+  if (!isRecord(defaults.value) || !isRecord(existing.value)) {
+    return cloneSerializable(existing);
+  }
+
+  const defaultServices = isRecord(defaults.value.services) ? defaults.value.services : {};
+  const existingServices = isRecord(existing.value.services) ? existing.value.services : {};
+  const services: Record<string, unknown> = { ...existingServices };
+  const externalDatabase =
+    !('db' in existingServices) && isRecord(existingServices['aas-environment']);
+
+  Object.entries(defaultServices).forEach(([serviceName, defaultValue]) => {
+    if (serviceName === 'db' && externalDatabase) return;
+    if (!isRecord(defaultValue)) {
+      if (!(serviceName in services)) {
+        services[serviceName] = cloneSerializable(defaultValue);
+      }
+      return;
+    }
+
+    const existingValue = services[serviceName];
+    if (!isRecord(existingValue)) {
+      services[serviceName] = cloneSerializable(defaultValue);
+      return;
+    }
+
+    const mergedService: Record<string, unknown> = { ...defaultValue, ...existingValue };
+    if ('environment' in defaultValue || 'environment' in existingValue) {
+      let defaultEnvironment =
+        isStringRecord(defaultValue.environment) || Array.isArray(defaultValue.environment)
+          ? defaultValue.environment
+          : undefined;
+      if (externalDatabase && defaultEnvironment) {
+        defaultEnvironment = removeEnvironmentKeys(defaultEnvironment, ['POSTGRES_PASSWORD']);
+      }
+      const existingEnvironment =
+        isStringRecord(existingValue.environment) || Array.isArray(existingValue.environment)
+          ? existingValue.environment
+          : undefined;
+      mergedService.environment = mergeEnvironmentDefaults(defaultEnvironment, existingEnvironment);
+    }
+    services[serviceName] = mergedService;
+  });
+
+  if (externalDatabase) {
+    for (const serviceName of ['aas-environment', 'basyx_configuration']) {
+      const service = services[serviceName];
+      if (!isRecord(service)) continue;
+      const dependencies = isRecord(service.depends_on) ? { ...service.depends_on } : {};
+      delete dependencies.db;
+      services[serviceName] = { ...service, depends_on: dependencies };
+    }
+  }
+
+  if (isRecord(services.keycloak)) {
+    const keycloak = services.keycloak;
+    const networks = isRecord(keycloak.networks) ? keycloak.networks : {};
+    services.keycloak = {
+      ...keycloak,
+      networks: { ...networks, default: { aliases: ['keycloak.localhost'] } },
+    };
+    for (const serviceName of ['aas-environment', 'aas-ui']) {
+      const service = services[serviceName];
+      if (!isRecord(service) || !Array.isArray(service.extra_hosts)) continue;
+      const extraHosts = service.extra_hosts.filter(
+        host => typeof host !== 'string' || !host.startsWith('keycloak.localhost:')
+      );
+      const updated = { ...service };
+      if (extraHosts.length) updated.extra_hosts = extraHosts;
+      else delete updated.extra_hosts;
+      services[serviceName] = updated;
+    }
+  }
+
+  // Shared links omit secrets. Restore only the fixed credentials of generated local
+  // services; external credentials must still be supplied by the user.
+  const db = services.db;
+  const dbEnvironment = isRecord(db) ? db.environment : undefined;
+  const dbEntries = Array.isArray(dbEnvironment)
+    ? readEnvironmentEntries(dbEnvironment)
+    : isStringRecord(dbEnvironment)
+      ? dbEnvironment
+      : {};
+  const keycloak = services.keycloak;
+  if (isRecord(keycloak) && isRecord(db) && dbEntries.POSTGRES_PASSWORD) {
+    services.keycloak = {
+      ...keycloak,
+      environment: mergeEnvironmentDefaults(
+        { KC_DB_PASSWORD: dbEntries.POSTGRES_PASSWORD },
+        isStringRecord(keycloak.environment) || Array.isArray(keycloak.environment)
+          ? keycloak.environment
+          : undefined
+      ),
+    };
+  }
+  const rabbitmq = services.rabbitmq;
+  if (isRecord(rabbitmq)) {
+    services.rabbitmq = {
+      ...rabbitmq,
+      environment: mergeEnvironmentDefaults(
+        { RABBITMQ_DEFAULT_PASS: 'basyx-demo' },
+        isStringRecord(rabbitmq.environment) || Array.isArray(rabbitmq.environment)
+          ? rabbitmq.environment
+          : undefined
+      ),
+    };
+    const aasEnvironment = services['aas-environment'];
+    if (isRecord(aasEnvironment)) {
+      services['aas-environment'] = {
+        ...aasEnvironment,
+        environment: mergeEnvironmentDefaults(
+          { BASYX_EVENTING_AMQP_PASSWORD: 'basyx-demo' },
+          isStringRecord(aasEnvironment.environment) || Array.isArray(aasEnvironment.environment)
+            ? aasEnvironment.environment
+            : undefined
+        ),
+      };
+    }
+  }
+
+  return syncBasyxGoImageTag(
+    {
+      ...cloneSerializable(defaults),
+      ...cloneSerializable(existing),
+      value: {
+        ...defaults.value,
+        ...existing.value,
+        services,
+      },
+    },
+    'aas-environment'
+  );
+}
+
+function mergeBasyxConfigDefaults(
+  defaults: BasyxConfigItem[],
+  existing: BasyxConfigItem[]
+): BasyxConfigItem[] {
+  const defaultIds = new Set(defaults.map(item => item.id));
+  const mergedDefaults = defaults.map(defaultItem => {
+    const existingItem = existing.find(item => item.id === defaultItem.id);
+    if (!existingItem) {
+      return cloneSerializable(defaultItem);
+    }
+
+    const existingChildIds = new Set(existingItem.children.map(child => child.id));
+    return {
+      ...cloneSerializable(defaultItem),
+      ...cloneSerializable(existingItem),
+      children: [
+        ...cloneSerializable(existingItem.children),
+        ...cloneSerializable(defaultItem.children).filter(child => !existingChildIds.has(child.id)),
+      ],
+    };
+  });
+  return [...mergedDefaults, ...existing.filter(item => !defaultIds.has(item.id))];
 }
 
 function getContainerPortValue(
@@ -183,8 +461,8 @@ function setDockerComposeServicePort(
 
   if (serviceName === 'aas-environment') {
     service.ports[0] = `${port}:${port}`;
-    if (service.environment && Array.isArray(service.environment)) {
-      setOrReplaceEnvVar(service.environment, 'SERVER_PORT', String(port));
+    if (service.environment) {
+      setEnvironmentValue(service.environment, 'SERVER_PORT', String(port));
     }
     return;
   }
@@ -209,15 +487,13 @@ function setDockerComposeServiceContextPath(
   }
 
   if (serviceName === 'aas-environment') {
-    if (!service.environment || !Array.isArray(service.environment)) {
+    if (!service.environment) {
       service.environment = [];
     }
     if (contextPath) {
-      setOrReplaceEnvVar(service.environment, 'SERVER_CONTEXTPATH', contextPath);
+      setEnvironmentValue(service.environment, 'SERVER_CONTEXTPATH', contextPath);
     } else {
-      service.environment = service.environment.filter(
-        entry => !entry.startsWith('SERVER_CONTEXTPATH=')
-      );
+      service.environment = removeEnvironmentKeys(service.environment, ['SERVER_CONTEXTPATH']);
     }
   }
 
@@ -253,26 +529,65 @@ function createDefaultDockerComposeConfig(
           pull_policy: 'always',
           ports: ['8082:8082'],
           environment: [
+            'LOGGING_FORMAT=text',
+            'LOGGING_LEVEL=info',
             'SERVER_PORT=8082',
+            'SERVER_CACHEENABLED=false',
+            'SERVER_STRICTVERIFICATION=permissive',
+            'SERVER_VERIFICATIONENDPOINTAVAILABLE=true',
+            'SERVER_READ_HEADER_TIMEOUT_SECONDS=15',
+            'SERVER_READ_TIMEOUT_SECONDS=300',
+            'SERVER_WRITE_TIMEOUT_SECONDS=300',
+            'SERVER_IDLE_TIMEOUT_SECONDS=60',
+            'SERVER_SHUTDOWN_TIMEOUT_SECONDS=10',
             'CORS_ALLOWEDORIGINS=*',
             'CORS_ALLOWEDHEADERS=*',
-            'CORS_ALLOWEDCREDENTIALS=true',
+            'CORS_ALLOWCREDENTIALS=true',
             'CORS_ALLOWEDMETHODS=GET,POST,PUT,PATCH,DELETE,OPTIONS',
             'POSTGRES_HOST=db',
             'POSTGRES_PORT=5432',
             'POSTGRES_USER=admin',
             'POSTGRES_PASSWORD=admin123',
             'POSTGRES_DBNAME=basyxTestDB',
-            'POSTGRES_MAXOPENCONNECTIONS=500',
-            'POSTGRES_MAXIDLECONNECTIONS=500',
+            'POSTGRES_SSLMODE=disable',
+            'POSTGRES_CONNECTTIMEOUTSECONDS=0',
+            'POSTGRES_MAXOPENCONNECTIONS=50',
+            'POSTGRES_MAXIDLECONNECTIONS=25',
             'POSTGRES_CONNMAXLIFETIMEMINUTES=5',
+            'POSTGRES_CONNMAXIDLETIMEMINUTES=0',
             'JWS_PRIVATEKEYPATH=/app/rsa-key.pem',
             'ABAC_ENABLED=false',
+            'GENERAL_ENABLEIMPLICITCASTS=true',
+            'GENERAL_ENABLEDESCRIPTORDEBUG=false',
+            'GENERAL_ENABLECUSTOMMIDDLEWAREHEADERINJECTION=false',
+            'GENERAL_SUPPORTSSINGULARSUPPLEMENTALSEMANTICID=false',
+            'GENERAL_TRUSTPROXYHEADERS=false',
+            'GENERAL_UPLOADMAXSIZEBYTES=134217728',
+            'GENERAL_AASXMAXPARTCOUNT=10000',
+            'GENERAL_AASXMAXOPCMETADATASIZEBYTES=16777216',
+            'GENERAL_AASXMAXPARTEXPANDEDSIZEBYTES=134217728',
+            'GENERAL_AASXMAXTOTALEXPANDEDSIZEBYTES=536870912',
+            'GENERAL_AASXMAXTHUMBNAILSIZEBYTES=16777216',
+            'GENERAL_BULK_BATCH_LIMIT=1000',
             'GENERAL_AASREGISTRYINTEGRATION=true',
             'GENERAL_SUBMODELREGISTRYINTEGRATION=true',
             'GENERAL_DISCOVERYINTEGRATION=true',
             `GENERAL_EXTERNALURL=${aasEnvironmentExternalUrl}`,
             'GENERAL_AAS_PRECONFIG_PATHS=/app/preconfiguration',
+            'BASYX_HISTORY_MODE=off',
+            'BASYX_HISTORY_RETENTION_DAYS=0',
+            'BASYX_HISTORY_FULL_SNAPSHOT_INTERVAL=1',
+            'BASYX_HISTORY_IMMUTABILITY=none',
+            'BASYX_AUDIT_IDENTITY_MODE=none',
+            'BASYX_HISTORY_EVIDENCE_ENABLED=false',
+            'BASYX_HISTORY_INTEGRITY_ANCHOR_PROVIDER=none',
+            'BASYX_EVENTING_ENABLED=false',
+            'BASYX_EVENTING_FORMAT=cloudevents',
+            'BASYX_EVENTING_OUTBOX_ENABLED=false',
+            'BASYX_EVENTING_TOPIC_PREFIX=basyx',
+            'BASYX_EVENTING_FEED_ENABLED=false',
+            'OTEL_TRACES_EXPORTER=none',
+            'OTEL_METRICS_EXPORTER=none',
           ],
           volumes: ['./basyx/rsa-key.pem:/app/rsa-key.pem:ro', './aas:/app/preconfiguration:ro'],
           depends_on: {
@@ -308,9 +623,12 @@ function createDefaultDockerComposeConfig(
             'POSTGRES_USER=admin',
             'POSTGRES_PASSWORD=admin123',
             'POSTGRES_DBNAME=basyxTestDB',
-            'POSTGRES_MAXOPENCONNECTIONS=500',
-            'POSTGRES_MAXIDLECONNECTIONS=500',
+            'POSTGRES_SSLMODE=disable',
+            'POSTGRES_CONNECTTIMEOUTSECONDS=0',
+            'POSTGRES_MAXOPENCONNECTIONS=50',
+            'POSTGRES_MAXIDLECONNECTIONS=25',
             'POSTGRES_CONNMAXLIFETIMEMINUTES=5',
+            'POSTGRES_CONNMAXIDLETIMEMINUTES=0',
           ],
           depends_on: {
             db: {
@@ -416,6 +734,8 @@ function initialState() {
     logoDark: undefined as File | undefined,
     telegrafConf: undefined as File | undefined,
     aasFiles: undefined as File[] | undefined,
+    accessPolicyJson: DEFAULT_POLICY,
+    trustListJson: defaultTrustList(),
 
     // editable docker settings
     containerPorts: [
@@ -445,6 +765,16 @@ function initialState() {
           {
             id: 'ovw-aas-environment-summary',
             title: 'Runtime & Endpoints',
+            type: 'overview',
+          },
+          {
+            id: 'ovw-aas-environment-history',
+            title: 'History & Audit',
+            type: 'overview',
+          },
+          {
+            id: 'ovw-aas-environment-observability',
+            title: 'Logging & OpenTelemetry',
             type: 'overview',
           },
           {
@@ -721,10 +1051,58 @@ export const useAppStore = defineStore('app', {
     },
 
     setDockerComposeConfig(config: ConfigObject) {
-      this.dockerComposeConfig = config;
+      const previousAasTag = getBasyxGoImageTag(this.dockerComposeConfig, 'aas-environment');
+      const previousConfigTag = getBasyxGoImageTag(this.dockerComposeConfig, 'basyx_configuration');
+      const aasTag = getBasyxGoImageTag(config, 'aas-environment');
+      const configTag = getBasyxGoImageTag(config, 'basyx_configuration');
+      const changedConfigOnly = configTag !== previousConfigTag && aasTag === previousAasTag;
+      this.dockerComposeConfig = syncBasyxGoImageTag(
+        config,
+        changedConfigOnly ? 'basyx_configuration' : 'aas-environment'
+      );
+    },
+    setBasyxGoImageTag(serviceName: BasyxGoServiceName, tag: string) {
+      if (!this.dockerComposeConfig) return;
+      const config = cloneSerializable(this.dockerComposeConfig);
+      if (!isRecord(config.value) || !isRecord(config.value.services)) return;
+      const service = config.value.services[serviceName];
+      if (!isRecord(service) || !tag.trim()) return;
+      service.image = `${BASYX_GO_IMAGE_REPOSITORIES[serviceName]}:${tag.trim()}`;
+      this.dockerComposeConfig = syncBasyxGoImageTag(config, serviceName);
     },
     setBasyxInfraConfig(config: ConfigObject) {
       this.basyxInfraConfig = config;
+    },
+    updateServiceEnvironment(
+      serviceName: string,
+      values: Record<string, string>,
+      removeKeys: string[] = []
+    ) {
+      const currentConfig = this.dockerComposeConfig;
+      const currentValue = currentConfig?.value;
+      if (!currentConfig || !isRecord(currentValue) || !isRecord(currentValue.services)) {
+        return;
+      }
+
+      const dockerComposeConfig = cloneSerializable(currentConfig);
+      const composeValue = dockerComposeConfig.value;
+      if (!isRecord(composeValue) || !isRecord(composeValue.services)) {
+        return;
+      }
+      const services = composeValue.services as Record<string, DockerComposeService>;
+      const service = services[serviceName];
+      if (!service) {
+        return;
+      }
+
+      if (!service.environment) {
+        service.environment = [];
+      }
+      service.environment = removeEnvironmentKeys(service.environment, removeKeys);
+      Object.entries(values).forEach(([key, value]) => {
+        setEnvironmentValue(service.environment as Environment, key, value);
+      });
+      this.setDockerComposeConfig(dockerComposeConfig);
     },
     initializeStarterDefaults() {
       this.updateUserInterface(true);
@@ -762,18 +1140,18 @@ export const useAppStore = defineStore('app', {
         getContextPathValue(this.contextPathes, 'aas-environment')
       );
 
-      if (
-        this.dockerComposeConfig?.value &&
-        typeof this.dockerComposeConfig.value === 'object' &&
-        'services' in this.dockerComposeConfig.value
-      ) {
+      const currentComposeValue = this.dockerComposeConfig?.value;
+      if (isRecord(currentComposeValue) && isRecord(currentComposeValue.services)) {
         const dockerComposeConfig = { ...this.dockerComposeConfig };
-        const services = (dockerComposeConfig.value as { services: Record<string, unknown> })
-          .services;
-        const aasEnvironment = services['aas-environment'] as
-          { environment?: string[] } | undefined;
-        if (aasEnvironment?.environment && Array.isArray(aasEnvironment.environment)) {
-          setOrReplaceEnvVar(aasEnvironment.environment, 'GENERAL_EXTERNALURL', externalBaseUrl);
+        const services = currentComposeValue.services as Record<string, unknown>;
+        const aasEnvironment = services['aas-environment'];
+        if (isRecord(aasEnvironment)) {
+          const environment = aasEnvironment.environment;
+          if (isStringRecord(environment) || Array.isArray(environment)) {
+            setEnvironmentValue(environment, 'GENERAL_EXTERNALURL', externalBaseUrl);
+            aasEnvironment.environment = environment;
+            services['aas-environment'] = aasEnvironment;
+          }
           this.setDockerComposeConfig(dockerComposeConfig);
         }
       }
@@ -890,10 +1268,19 @@ export const useAppStore = defineStore('app', {
         this.contextPathes = cloneSerializable(data.contextPathes);
       }
       if (isBasyxConfigArray(data.basyxConfig)) {
-        this.basyxConfig = cloneSerializable(data.basyxConfig);
+        const defaults = initialState();
+        this.basyxConfig = mergeBasyxConfigDefaults(defaults.basyxConfig, data.basyxConfig);
       }
       if (isConfigObject(data.dockerComposeConfig)) {
-        this.dockerComposeConfig = cloneSerializable(data.dockerComposeConfig);
+        const defaultDockerComposeConfig = createDefaultDockerComposeConfig(
+          this.externalBaseUrl,
+          getContainerPortValue(this.containerPorts, 'aas-environment'),
+          getContextPathValue(this.contextPathes, 'aas-environment')
+        );
+        this.dockerComposeConfig = mergeDockerComposeConfig(
+          defaultDockerComposeConfig,
+          data.dockerComposeConfig
+        );
       }
       if (isConfigObject(data.basyxInfraConfig)) {
         this.basyxInfraConfig = cloneSerializable(data.basyxInfraConfig);

@@ -28,9 +28,19 @@
         >Behaviour</v-list-subheader
       >
       <v-list-item
+        title="BaSyx Runtime"
+        to="/get-started/behaviour/runtime"
+        :class="isActive('/get-started/behaviour/runtime') ? 'text-primary' : 'text-subheader'"
+      />
+      <v-list-item
         title="Persistence Backend"
         to="/get-started/behaviour/persistence"
         :class="isActive('/get-started/behaviour/persistence') ? 'text-primary' : 'text-subheader'"
+      />
+      <v-list-item
+        title="History and Audit"
+        to="/get-started/behaviour/history"
+        :class="isActive('/get-started/behaviour/history') ? 'text-primary' : 'text-subheader'"
       />
       <v-list-item
         title="Eventing"
@@ -74,6 +84,13 @@
         to="/get-started/deployment/container-config"
         :class="
           isActive('/get-started/deployment/container-config') ? 'text-primary' : 'text-subheader'
+        "
+      />
+      <v-list-item
+        title="Logging and Telemetry"
+        to="/get-started/deployment/observability"
+        :class="
+          isActive('/get-started/deployment/observability') ? 'text-primary' : 'text-subheader'
         "
       />
       <v-list-item

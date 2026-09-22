@@ -4,6 +4,10 @@
       <h2 class="text-header">Container Image Tag</h2>
       <p class="text-normalText mt-8 mb-5 text-subtitle-1">
         Select a Docker image tag. You can also type a custom tag manually.
+        <span v-if="isBasyxGoService">
+          The AAS Environment and Configuration Service use the same tag; changing either updates
+          both.
+        </span>
       </p>
       <v-combobox
         :model-value="imageTag"
@@ -125,6 +129,9 @@ const dockerComposeConfigObject = computed(() => appStore.getDockerComposeConfig
 const servicePort = computed(() => appStore.getContainerPort(props.serviceName));
 const serviceContainerName = computed(() => appStore.getContainerName(props.serviceName));
 const managedRepository = computed(() => MANAGED_REPOSITORIES[props.serviceName] || '');
+const isBasyxGoService = computed(
+  () => props.serviceName === 'aas-environment' || props.serviceName === 'basyx_configuration'
+);
 const shouldForceLatestOption = computed(() => managedRepository.value === 'eclipsebasyx/aas-gui');
 const showContextPath = computed(
   () => props.serviceName === 'aas-ui' || props.serviceName === 'aas-environment'
@@ -238,27 +245,6 @@ function updateImageInService(
     return;
   }
   service.image = `${repository}:${tag}`;
-}
-
-function syncAasGoCompanionServiceTag(
-  dockerConfig: { services: Record<string, DockerComposeService> },
-  tag: string
-): void {
-  const shouldSync =
-    props.serviceName === 'aas-environment' || props.serviceName === 'basyx_configuration';
-  if (!shouldSync) {
-    return;
-  }
-
-  const counterpartName =
-    props.serviceName === 'aas-environment' ? 'basyx_configuration' : 'aas-environment';
-
-  const counterpartService = dockerConfig.services[counterpartName];
-  if (!counterpartService) {
-    return;
-  }
-
-  updateImageInService(counterpartService, tag, MANAGED_REPOSITORIES[counterpartName]);
 }
 
 function setOrReplaceEnvVar(env: string[], key: string, value: string): void {
@@ -524,8 +510,12 @@ function updateImageTag(tagInput: unknown): void {
     return;
   }
 
-  updateImageInService(service, tag);
-  syncAasGoCompanionServiceTag(dockerConfig, tag);
+  if (props.serviceName === 'aas-environment' || props.serviceName === 'basyx_configuration') {
+    appStore.setBasyxGoImageTag(props.serviceName, tag);
+  } else {
+    updateImageInService(service, tag);
+    appStore.setDockerComposeConfig(localDockerComposeConfig);
+  }
   imageTag.value = tag;
   if (!availableTagItems.value.some(item => item.value === tag)) {
     availableTagItems.value = [
@@ -533,7 +523,5 @@ function updateImageTag(tagInput: unknown): void {
       ...availableTagItems.value,
     ];
   }
-
-  appStore.setDockerComposeConfig(localDockerComposeConfig);
 }
 </script>

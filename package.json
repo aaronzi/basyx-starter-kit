@@ -52,7 +52,7 @@
     "pinia": "^4.0.3",
     "pnpm": "12.6.0",
     "prettier": "^3.9.8",
-    "sass": "^1.104.1",
+    "sass": "^1.105.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.0",
     "vite-plugin-vuetify": "^2.1.3",

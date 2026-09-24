@@ -256,12 +256,13 @@ describe('starter setup + persistence flow', () => {
     expect(store.getDockerComposeConfigAsString.value).not.toContain('TRUSTED_ORIGINS');
   });
 
-  it('derives the browser-facing InfluxDB origin without trusting it automatically', () => {
+  it('maintains the generated local InfluxDB origin without changing external trust', () => {
     const store = useAppStore();
     store.initializeStarterDefaults();
     store.updateExternalBaseUrl('https://basyx.example.org:8082/api');
     store.setContainerPort('influxdb', 18086);
     store.updateTimeSeriesData(true);
+    store.updateDefaultInfrastructureTrustedOrigins(['https://manual.example.org']);
 
     const compose = store.getDockerComposeConfig as {
       name?: string;
@@ -271,13 +272,22 @@ describe('starter setup + persistence flow', () => {
     store.setDockerComposeConfig(compose);
 
     expect(store.getConfiguredInfluxDbOrigin).toBe('http://basyx.example.org:18086');
-    expect(store.getBasyxInfraConfigAsString.value).not.toContain('trustedOrigins');
+    expect(store.getBasyxInfraConfigAsString.value).toContain('http://basyx.example.org:18086');
+    expect(store.getBasyxInfraConfigAsString.value).toContain('https://manual.example.org');
+
+    store.updateExternalBaseUrl('https://new-basyx.example.org:8082/api');
+    expect(store.getBasyxInfraConfigAsString.value).not.toContain('http://basyx.example.org:18086');
+    expect(store.getBasyxInfraConfigAsString.value).toContain('http://new-basyx.example.org:18086');
 
     store.setContainerPort('influxdb', 443);
-    expect(store.getConfiguredInfluxDbOrigin).toBe('http://basyx.example.org:443');
+    expect(store.getConfiguredInfluxDbOrigin).toBe('http://new-basyx.example.org:443');
+    expect(store.getBasyxInfraConfigAsString.value).not.toContain(
+      'http://new-basyx.example.org:18086'
+    );
+    expect(store.getBasyxInfraConfigAsString.value).toContain('http://new-basyx.example.org:443');
 
     store.setContainerPort('influxdb', undefined);
-    expect(store.getConfiguredInfluxDbOrigin).toBe('http://basyx.example.org:8086');
+    expect(store.getConfiguredInfluxDbOrigin).toBe('http://new-basyx.example.org:8086');
 
     delete compose.value.services.influxdb;
     compose.value.services.telegraf = {
@@ -285,5 +295,83 @@ describe('starter setup + persistence flow', () => {
     };
     store.setDockerComposeConfig(compose);
     expect(store.getConfiguredInfluxDbOrigin).toBe('https://influx.example.org:9443');
+    expect(store.getBasyxInfraConfigAsString.value).not.toContain(
+      'http://new-basyx.example.org:8086'
+    );
+    expect(store.getBasyxInfraConfigAsString.value).not.toContain(
+      'https://influx.example.org:9443'
+    );
+    expect(store.getBasyxInfraConfigAsString.value).toContain('https://manual.example.org');
+  });
+
+  it('persists a deliberate local InfluxDB trust removal across unrelated updates and sharing', () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    store.updateExternalBaseUrl('http://deployment.example:8082');
+    store.updateTimeSeriesData(true);
+
+    const compose = store.getDockerComposeConfig as {
+      name?: string;
+      value: { services: Record<string, unknown> };
+    };
+    compose.value.services.influxdb = { ports: ['8086:8086'] };
+    store.setDockerComposeConfig(compose);
+    expect(store.getBasyxInfraConfigAsString.value).toContain('http://deployment.example:8086');
+
+    store.updateDefaultInfrastructureTrustedOrigins(['https://manual.example.org']);
+    store.setDockerComposeConfig(compose);
+    expect(store.getBasyxInfraConfigAsString.value).not.toContain('http://deployment.example:8086');
+
+    const encoded = encodeConfigHash({
+      route: '/get-started/visualization/ui',
+      state: store.createSerializableSnapshot(),
+    });
+    const snapshot = decodeConfigHash(encoded).payload?.state;
+    store.reset();
+    store.initializeStarterDefaults();
+    store.applySerializableSnapshot(snapshot);
+
+    expect(store.getBasyxInfraConfigAsString.value).not.toContain('http://deployment.example:8086');
+    expect(store.getBasyxInfraConfigAsString.value).toContain('https://manual.example.org');
+
+    const legacySnapshot = JSON.parse(JSON.stringify(snapshot)) as typeof snapshot;
+    if (!legacySnapshot) throw new Error('Expected a decoded snapshot');
+    delete legacySnapshot.managedInfluxDbOrigin;
+    delete legacySnapshot.localInfluxDbOriginOptOutKey;
+    const infrastructures = (
+      legacySnapshot.basyxInfraConfig?.value as {
+        infrastructures: Record<string, unknown>;
+      }
+    ).infrastructures;
+    const defaultKey = infrastructures.default;
+    const defaultInfrastructure =
+      typeof defaultKey === 'string' ? infrastructures[defaultKey] : undefined;
+    if (!defaultInfrastructure || typeof defaultInfrastructure !== 'object') {
+      throw new Error('Expected a default infrastructure');
+    }
+    delete (defaultInfrastructure as Record<string, unknown>).trustedOrigins;
+
+    store.reset();
+    store.initializeStarterDefaults();
+    store.applySerializableSnapshot(legacySnapshot);
+    expect(store.getBasyxInfraConfigAsString.value).toContain('http://deployment.example:8086');
+  });
+
+  it('does not claim a matching manually trusted InfluxDB origin as auto-managed', () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    store.updateExternalBaseUrl('http://deployment.example:8082');
+    store.updateDefaultInfrastructureTrustedOrigins(['http://deployment.example:8086']);
+    store.updateTimeSeriesData(true);
+
+    const compose = store.getDockerComposeConfig as {
+      name?: string;
+      value: { services: Record<string, unknown> };
+    };
+    compose.value.services.influxdb = { ports: ['8086:8086'] };
+    store.setDockerComposeConfig(compose);
+    store.updateTimeSeriesData(false);
+
+    expect(store.getBasyxInfraConfigAsString.value).toContain('http://deployment.example:8086');
   });
 });

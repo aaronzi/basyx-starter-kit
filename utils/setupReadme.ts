@@ -53,6 +53,8 @@ docker compose up -d
 - Add extra browser destinations to the selected infrastructure's \`trustedOrigins\` list as exact
   HTTP(S) origins (scheme, host, and optional port only). Configured component origins, relative
   URLs, and the deployed BaSyx Web UI's origin are trusted automatically.
+- The Starter Kit prefills the local InfluxDB container's HTTP origin. For external InfluxDB or
+  an HTTPS reverse proxy, configure the browser-accessible origin explicitly.
 - Additional trusted origins may receive infrastructure credentials. List only destinations you
   trust with these credentials. The InfluxDB LinkedSegment token does not make its destination
   trusted.

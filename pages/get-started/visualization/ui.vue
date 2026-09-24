@@ -94,13 +94,17 @@
             variant="tonal"
             class="mt-4 mb-3"
           >
-            <template v-if="configuredInfluxOrigin">
-              The configured browser origin for InfluxDB is
-              <code>{{ configuredInfluxOrigin }}</code
-              >. <code>INFLUXDB_TOKEN</code> authenticates LinkedSegment requests, but does not make
-              their destination trusted. If Telegraf uses a different internal address, enter the
-              browser-accessible InfluxDB origin instead. The generated local container uses HTTP;
-              enter the public origin manually if a reverse proxy provides HTTPS.
+            <template v-if="hasLocalInfluxDb && configuredInfluxOrigin">
+              The Starter Kit prefills <code>{{ configuredInfluxOrigin }}</code> for the local
+              InfluxDB container and updates it when the deployment hostname or port changes. The
+              container uses HTTP. If you use an HTTPS reverse proxy, replace this entry with its
+              browser-accessible origin.
+            </template>
+            <template v-else-if="configuredInfluxOrigin">
+              The configured InfluxDB origin is <code>{{ configuredInfluxOrigin }}</code
+              >. Add it below if it is also reachable from the browser; otherwise enter the
+              browser-accessible origin above. <code>INFLUXDB_TOKEN</code> authenticates
+              LinkedSegment requests, but does not make their destination trusted.
             </template>
             <template v-else>
               Enter the browser-accessible InfluxDB origin above. It may differ from the URL that
@@ -108,7 +112,7 @@
             </template>
           </v-alert>
           <v-btn
-            v-if="configuredInfluxOrigin"
+            v-if="configuredInfluxOrigin && (!hasLocalInfluxDb || !configuredInfluxOriginTrusted)"
             class="mr-3"
             variant="tonal"
             color="secondary"
@@ -152,6 +156,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useAppStore } from '@/stores/app';
+import { getComposeServices } from '@/utils/optionalServices';
 import { parseTrustedOriginsText } from '@/utils/trustedOrigins';
 
 interface BasyxConfigItem {
@@ -202,6 +207,7 @@ const isTimeSeriesDataEnabled = computed(() => appStore.getTimeSeriesData);
 const dockerComposeConfigObject = computed(() => appStore.getDockerComposeConfig);
 const basyxInfraConfigObject = computed(() => appStore.getBasyxInfraConfig);
 const configuredInfluxOrigin = computed(() => appStore.getConfiguredInfluxDbOrigin);
+const hasLocalInfluxDb = computed(() => Boolean(getComposeServices()?.influxdb));
 const trustedOriginsAreValid = computed(
   () => parseTrustedOriginsText(trustedOriginsText.value) !== null
 );

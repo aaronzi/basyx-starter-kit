@@ -213,7 +213,7 @@ describe('UI page', () => {
     ]);
   });
 
-  it('adds the configured local InfluxDB origin only after an explicit click', async () => {
+  it('shows the automatically trusted local InfluxDB origin without an add action', () => {
     const store = useAppStore();
     store.initializeStarterDefaults();
     store.updateExternalBaseUrl('http://deployment.example:8082');
@@ -246,12 +246,11 @@ describe('UI page', () => {
       },
     });
 
-    expect(store.getBasyxInfraConfigAsString.value).not.toContain('trustedOrigins');
+    expect(store.getBasyxInfraConfigAsString.value).toContain('http://deployment.example:18086');
     expect(wrapper.text()).toContain('http://deployment.example:18086');
     const addButton = wrapper
       .findAll('button')
-      .find(button => button.text().includes('Add configured InfluxDB origin'))!;
-    await addButton.trigger('click');
-    expect(store.getBasyxInfraConfigAsString.value).toContain('http://deployment.example:18086');
+      .find(button => button.text().includes('Add configured InfluxDB origin'));
+    expect(addButton).toBeUndefined();
   });
 });

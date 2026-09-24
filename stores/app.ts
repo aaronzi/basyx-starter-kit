@@ -50,6 +50,11 @@ interface ConfigObject {
   value?: string | Record<string, unknown>;
 }
 
+interface ManagedInfluxDbOrigin {
+  infrastructureKey: string;
+  origin: string;
+}
+
 interface DockerComposeService {
   ports?: string[];
   environment?: Record<string, string> | string[];
@@ -76,6 +81,8 @@ export interface SerializableStarterState {
   basyxConfig: BasyxConfigItem[];
   dockerComposeConfig?: ConfigObject;
   basyxInfraConfig?: ConfigObject;
+  managedInfluxDbOrigin?: ManagedInfluxDbOrigin;
+  localInfluxDbOriginOptOutKey?: string;
 }
 
 function cloneSerializable<T>(value: T): T {
@@ -97,6 +104,87 @@ function isConfigObject(value: unknown): value is ConfigObject {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getDockerComposeServices(
+  config: ConfigObject | undefined
+): Record<string, unknown> | undefined {
+  return isRecord(config?.value) && isRecord(config.value.services)
+    ? config.value.services
+    : undefined;
+}
+
+function hasLocalInfluxDb(config: ConfigObject | undefined): boolean {
+  return isRecord(getDockerComposeServices(config)?.influxdb);
+}
+
+function getLocalInfluxDbOrigin(
+  enabled: boolean,
+  externalBaseUrl: string,
+  containerPorts: ContainerPort[],
+  dockerComposeConfig: ConfigObject | undefined
+): string | undefined {
+  if (!enabled || !hasLocalInfluxDb(dockerComposeConfig)) {
+    return undefined;
+  }
+
+  const influxPort = getContainerPortValue(containerPorts, 'influxdb') ?? 8086;
+  const browserUrl = buildExternalServiceUrl(externalBaseUrl, influxPort);
+  try {
+    const url = new URL(browserUrl);
+    url.protocol = 'http:';
+    url.port = String(influxPort);
+    return getHttpOrigin(url.toString()) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getDefaultInfrastructureKey(config: ConfigObject | undefined): string | undefined {
+  if (!isRecord(config?.value) || !isRecord(config.value.infrastructures)) {
+    return undefined;
+  }
+  const defaultKey = config.value.infrastructures.default;
+  return typeof defaultKey === 'string' ? defaultKey : undefined;
+}
+
+function getInfrastructureTrustedOrigins(
+  config: ConfigObject | undefined,
+  infrastructureKey: string
+): unknown[] | undefined {
+  if (!isRecord(config?.value) || !isRecord(config.value.infrastructures)) {
+    return undefined;
+  }
+  const infrastructure = config.value.infrastructures[infrastructureKey];
+  if (!isRecord(infrastructure)) {
+    return undefined;
+  }
+  return Array.isArray(infrastructure.trustedOrigins) ? infrastructure.trustedOrigins : [];
+}
+
+function withInfrastructureTrustedOrigins(
+  config: ConfigObject | undefined,
+  infrastructureKey: string,
+  origins: unknown[]
+): ConfigObject | undefined {
+  if (!config) {
+    return undefined;
+  }
+  const updated = cloneSerializable(config);
+  if (!isRecord(updated.value) || !isRecord(updated.value.infrastructures)) {
+    return undefined;
+  }
+  const infrastructure = updated.value.infrastructures[infrastructureKey];
+  if (!isRecord(infrastructure)) {
+    return undefined;
+  }
+
+  if (origins.length > 0) {
+    infrastructure.trustedOrigins = origins;
+  } else {
+    delete infrastructure.trustedOrigins;
+  }
+  return updated;
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {
@@ -841,6 +929,9 @@ function initialState() {
     // generated files
     dockerComposeConfig: undefined as ConfigObject | undefined,
     basyxInfraConfig: undefined as ConfigObject | undefined,
+    managedInfluxDbOrigin: undefined as ManagedInfluxDbOrigin | undefined,
+    localInfluxDbOriginOptOutKey: undefined as string | undefined,
+    localInfluxDbWasPresent: false,
 
     // legacy config slots (kept to avoid breakage while migrating pages)
     aasEnvConfig: undefined as ConfigObject | undefined,
@@ -880,16 +971,12 @@ export const useAppStore = defineStore('app', {
       }
 
       if (isRecord(services.influxdb)) {
-        const influxPort = getContainerPortValue(state.containerPorts, 'influxdb') ?? 8086;
-        const browserUrl = buildExternalServiceUrl(state.externalBaseUrl, influxPort);
-        try {
-          const url = new URL(browserUrl);
-          url.protocol = 'http:';
-          url.port = String(influxPort);
-          return getHttpOrigin(url.toString()) ?? undefined;
-        } catch {
-          return undefined;
-        }
+        return getLocalInfluxDbOrigin(
+          state.timeSeriesData,
+          state.externalBaseUrl,
+          state.containerPorts,
+          state.dockerComposeConfig
+        );
       }
 
       const influxUrl = readServiceEnvironment(
@@ -1029,6 +1116,7 @@ export const useAppStore = defineStore('app', {
     },
     updateTimeSeriesData(value: boolean) {
       this.timeSeriesData = value;
+      this.syncManagedLocalInfluxDbOrigin();
     },
     updateUserInterface(value: boolean) {
       this.userInterface = value;
@@ -1083,6 +1171,7 @@ export const useAppStore = defineStore('app', {
     },
 
     setDockerComposeConfig(config: ConfigObject) {
+      const localInfluxDbCreated = hasLocalInfluxDb(config) && !this.localInfluxDbWasPresent;
       const previousAasTag = getBasyxGoImageTag(this.dockerComposeConfig, 'aas-environment');
       const previousConfigTag = getBasyxGoImageTag(this.dockerComposeConfig, 'basyx_configuration');
       const aasTag = getBasyxGoImageTag(config, 'aas-environment');
@@ -1092,6 +1181,11 @@ export const useAppStore = defineStore('app', {
         config,
         changedConfigOnly ? 'basyx_configuration' : 'aas-environment'
       );
+      this.localInfluxDbWasPresent = hasLocalInfluxDb(this.dockerComposeConfig);
+      if (localInfluxDbCreated) {
+        this.localInfluxDbOriginOptOutKey = undefined;
+      }
+      this.syncManagedLocalInfluxDbOrigin();
     },
     setBasyxGoImageTag(serviceName: BasyxGoServiceName, tag: string) {
       if (!this.dockerComposeConfig) return;
@@ -1103,7 +1197,20 @@ export const useAppStore = defineStore('app', {
       this.dockerComposeConfig = syncBasyxGoImageTag(config, serviceName);
     },
     setBasyxInfraConfig(config: ConfigObject) {
+      const managedOrigin = this.managedInfluxDbOrigin;
+      if (managedOrigin) {
+        const origins = getInfrastructureTrustedOrigins(config, managedOrigin.infrastructureKey);
+        if (
+          origins &&
+          !origins.includes(managedOrigin.origin) &&
+          getDefaultInfrastructureKey(config) === managedOrigin.infrastructureKey
+        ) {
+          this.managedInfluxDbOrigin = undefined;
+          this.localInfluxDbOriginOptOutKey = managedOrigin.infrastructureKey;
+        }
+      }
       this.basyxInfraConfig = config;
+      this.syncManagedLocalInfluxDbOrigin();
     },
     updateDefaultInfrastructureTrustedOrigins(origins: readonly string[]): boolean {
       const normalizedOrigins = origins.map(parseTrustedOrigin);
@@ -1135,7 +1242,94 @@ export const useAppStore = defineStore('app', {
       }
       infrastructures[defaultKey] = infrastructure;
       this.basyxInfraConfig = updatedConfig;
+
+      const managedOrigin = this.managedInfluxDbOrigin;
+      if (
+        managedOrigin?.infrastructureKey === defaultKey &&
+        !normalizedOrigins.includes(managedOrigin.origin)
+      ) {
+        this.managedInfluxDbOrigin = undefined;
+        this.localInfluxDbOriginOptOutKey = defaultKey;
+      }
+
+      const localOrigin = getLocalInfluxDbOrigin(
+        this.timeSeriesData,
+        this.externalBaseUrl,
+        this.containerPorts,
+        this.dockerComposeConfig
+      );
+      if (
+        this.localInfluxDbOriginOptOutKey === defaultKey &&
+        localOrigin &&
+        normalizedOrigins.includes(localOrigin)
+      ) {
+        this.localInfluxDbOriginOptOutKey = undefined;
+        this.managedInfluxDbOrigin = { infrastructureKey: defaultKey, origin: localOrigin };
+      }
       return true;
+    },
+    syncManagedLocalInfluxDbOrigin(): void {
+      let infraConfig = this.basyxInfraConfig;
+      const defaultKey = getDefaultInfrastructureKey(infraConfig);
+      const localOrigin = getLocalInfluxDbOrigin(
+        this.timeSeriesData,
+        this.externalBaseUrl,
+        this.containerPorts,
+        this.dockerComposeConfig
+      );
+      const managedOrigin = this.managedInfluxDbOrigin;
+      const managedOriginStillCurrent = Boolean(
+        managedOrigin &&
+        managedOrigin.infrastructureKey === defaultKey &&
+        managedOrigin.origin === localOrigin
+      );
+
+      if (managedOrigin && !managedOriginStillCurrent) {
+        const origins = getInfrastructureTrustedOrigins(
+          infraConfig,
+          managedOrigin.infrastructureKey
+        );
+        if (origins) {
+          infraConfig =
+            withInfrastructureTrustedOrigins(
+              infraConfig,
+              managedOrigin.infrastructureKey,
+              origins.filter(origin => origin !== managedOrigin.origin)
+            ) ?? infraConfig;
+        }
+        this.managedInfluxDbOrigin = undefined;
+      }
+
+      if (!defaultKey || !localOrigin || this.localInfluxDbOriginOptOutKey === defaultKey) {
+        this.basyxInfraConfig = infraConfig;
+        return;
+      }
+
+      const origins = getInfrastructureTrustedOrigins(infraConfig, defaultKey);
+      if (!origins) {
+        this.basyxInfraConfig = infraConfig;
+        return;
+      }
+
+      if (managedOriginStillCurrent) {
+        if (!origins.includes(localOrigin)) {
+          infraConfig =
+            withInfrastructureTrustedOrigins(infraConfig, defaultKey, [...origins, localOrigin]) ??
+            infraConfig;
+        }
+        this.basyxInfraConfig = infraConfig;
+        return;
+      }
+
+      if (!origins.includes(localOrigin)) {
+        this.basyxInfraConfig =
+          withInfrastructureTrustedOrigins(infraConfig, defaultKey, [...origins, localOrigin]) ??
+          infraConfig;
+        this.managedInfluxDbOrigin = { infrastructureKey: defaultKey, origin: localOrigin };
+        return;
+      }
+
+      this.basyxInfraConfig = infraConfig;
     },
     updateServiceEnvironment(
       serviceName: string,
@@ -1285,6 +1479,8 @@ export const useAppStore = defineStore('app', {
         basyxConfig: this.basyxConfig,
         dockerComposeConfig: this.dockerComposeConfig,
         basyxInfraConfig: this.basyxInfraConfig,
+        managedInfluxDbOrigin: this.managedInfluxDbOrigin,
+        localInfluxDbOriginOptOutKey: this.localInfluxDbOriginOptOutKey,
       });
     },
     applySerializableSnapshot(snapshot: unknown) {
@@ -1349,9 +1545,29 @@ export const useAppStore = defineStore('app', {
       if (isConfigObject(data.basyxInfraConfig)) {
         this.basyxInfraConfig = cloneSerializable(data.basyxInfraConfig);
       }
+      if (
+        isRecord(data.managedInfluxDbOrigin) &&
+        typeof data.managedInfluxDbOrigin.infrastructureKey === 'string'
+      ) {
+        const origin = parseTrustedOrigin(data.managedInfluxDbOrigin.origin);
+        this.managedInfluxDbOrigin = origin
+          ? {
+              infrastructureKey: data.managedInfluxDbOrigin.infrastructureKey,
+              origin,
+            }
+          : undefined;
+      } else {
+        this.managedInfluxDbOrigin = undefined;
+      }
+      this.localInfluxDbOriginOptOutKey =
+        typeof data.localInfluxDbOriginOptOutKey === 'string'
+          ? data.localInfluxDbOriginOptOutKey
+          : undefined;
+      this.localInfluxDbWasPresent = hasLocalInfluxDb(this.dockerComposeConfig);
       if (typeof data.externalBaseUrl === 'string') {
         this.applyExternalBaseUrlToGeneratedConfigs();
       }
+      this.syncManagedLocalInfluxDbOrigin();
     },
 
     // legacy setters

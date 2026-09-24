@@ -204,12 +204,18 @@
         </v-btn>
 
         <v-alert color="secondary" variant="tonal" class="mb-8">
-          On the next page, open <strong>Expert: infrastructure endpoint management</strong> and add
-          the configured InfluxDB origin to the infrastructure trust list. The API token alone does
-          not authorize the Web UI to contact that origin. For an external database, use its
-          browser-accessible origin if that differs from the URL reachable inside Telegraf. The
-          generated local container uses HTTP; enter the public origin manually if you expose it
-          through an HTTPS reverse proxy.
+          <template v-if="includeLocalInfluxdb">
+            The Starter Kit automatically adds the local InfluxDB container's HTTP origin to the Web
+            UI's trusted origins. If you expose it through an HTTPS reverse proxy, replace this
+            entry with the public origin on the next page under
+            <strong>Expert: infrastructure endpoint management</strong>.
+          </template>
+          <template v-else>
+            On the next page, open <strong>Expert: infrastructure endpoint management</strong> and
+            add the external InfluxDB origin to the trust list. Use its browser-accessible origin if
+            that differs from the address reachable inside Telegraf. The API token alone does not
+            authorize the Web UI to contact that origin.
+          </template>
         </v-alert>
 
         <v-divider class="mt-12 mb-8" />

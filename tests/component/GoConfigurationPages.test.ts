@@ -84,12 +84,36 @@ describe('BaSyx Go configuration pages', () => {
 
     await wrapper.find('input[data-label="SERVER_READ_TIMEOUT_SECONDS"]').setValue('900');
     await wrapper.find('input[data-label="Maximum upload size (MiB)"]').setValue('256');
+    await wrapper
+      .find('input[data-label="Delegated operation response limit (MiB)"]')
+      .setValue('8');
     await applyButton(wrapper, 'Apply Runtime Settings')?.trigger('click');
     await nextTick();
 
     expect(environment().SERVER_READ_TIMEOUT_SECONDS).toBe('900');
     expect(environment().GENERAL_UPLOADMAXSIZEBYTES).toBe(String(256 * 1024 * 1024));
+    expect(environment().GENERAL_DELEGATEDOPERATIONRESPONSEMAXSIZEBYTES).toBe(
+      String(8 * 1024 * 1024)
+    );
     expect(environment().CORS_ALLOWCREDENTIALS).toBe('true');
+  });
+
+  it('restores and resets the delegated operation response limit', async () => {
+    expect(environment().GENERAL_DELEGATEDOPERATIONRESPONSEMAXSIZEBYTES).toBe('1048576');
+    useAppStore().updateServiceEnvironment('aas-environment', {
+      GENERAL_DELEGATEDOPERATIONRESPONSEMAXSIZEBYTES: String(4 * 1024 * 1024),
+    });
+
+    const wrapper = mount(RuntimePage, { global: { stubs: globalStubs } });
+    expect(
+      (
+        wrapper.find('input[data-label="Delegated operation response limit (MiB)"]')
+          .element as HTMLInputElement
+      ).value
+    ).toBe('4');
+
+    await applyButton(wrapper, 'Reset To Defaults')?.trigger('click');
+    expect(environment().GENERAL_DELEGATEDOPERATIONRESPONSEMAXSIZEBYTES).toBe('1048576');
   });
 
   it('applies pending runtime changes when advancing to the next page', async () => {

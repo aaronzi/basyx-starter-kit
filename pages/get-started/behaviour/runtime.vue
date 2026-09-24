@@ -185,6 +185,15 @@
                 hint="Saved to Compose as bytes."
                 persistent-hint
               />
+              <v-number-input
+                v-model="delegatedResponseMaxMiB"
+                label="Delegated operation response limit (MiB)"
+                :min="1"
+                variant="solo-filled"
+                control-variant="stacked"
+                hint="Limits JSON returned by delegated Submodel operations. Larger values use more memory."
+                persistent-hint
+              />
             </v-col>
             <v-col cols="12" md="6">
               <v-number-input
@@ -293,6 +302,7 @@ const DEFAULTS = {
   trustedProxyCidrs: '',
   bulkBatchLimit: 1000,
   uploadMaxMiB: 128,
+  delegatedResponseMaxMiB: 1,
   aasxMaxPartCount: 10000,
   aasxMetadataMiB: 16,
   aasxPartMiB: 128,
@@ -329,6 +339,7 @@ const trustProxyHeaders = ref(DEFAULTS.trustProxyHeaders);
 const trustedProxyCidrs = ref(DEFAULTS.trustedProxyCidrs);
 const bulkBatchLimit = ref(DEFAULTS.bulkBatchLimit);
 const uploadMaxMiB = ref(DEFAULTS.uploadMaxMiB);
+const delegatedResponseMaxMiB = ref(DEFAULTS.delegatedResponseMaxMiB);
 const aasxMaxPartCount = ref(DEFAULTS.aasxMaxPartCount);
 const aasxMetadataMiB = ref(DEFAULTS.aasxMetadataMiB);
 const aasxPartMiB = ref(DEFAULTS.aasxPartMiB);
@@ -397,6 +408,12 @@ function syncFromCompose(): void {
   uploadMaxMiB.value = Math.round(
     envNumber(env.GENERAL_UPLOADMAXSIZEBYTES, DEFAULTS.uploadMaxMiB * MIB) / MIB
   );
+  delegatedResponseMaxMiB.value = Math.round(
+    envNumber(
+      env.GENERAL_DELEGATEDOPERATIONRESPONSEMAXSIZEBYTES,
+      DEFAULTS.delegatedResponseMaxMiB * MIB
+    ) / MIB
+  );
   aasxMaxPartCount.value = envNumber(env.GENERAL_AASXMAXPARTCOUNT, DEFAULTS.aasxMaxPartCount);
   aasxMetadataMiB.value = Math.round(
     envNumber(env.GENERAL_AASXMAXOPCMETADATASIZEBYTES, DEFAULTS.aasxMetadataMiB * MIB) / MIB
@@ -436,6 +453,9 @@ function applySettings(): void {
       GENERAL_TRUSTEDPROXYCIDRS: trustProxyHeaders.value ? trustedProxyCidrs.value.trim() : '',
       GENERAL_BULK_BATCH_LIMIT: String(Math.max(1, bulkBatchLimit.value)),
       GENERAL_UPLOADMAXSIZEBYTES: String(Math.max(1, uploadMaxMiB.value) * MIB),
+      GENERAL_DELEGATEDOPERATIONRESPONSEMAXSIZEBYTES: String(
+        Math.max(1, delegatedResponseMaxMiB.value) * MIB
+      ),
       GENERAL_AASXMAXPARTCOUNT: String(Math.max(1, aasxMaxPartCount.value)),
       GENERAL_AASXMAXOPCMETADATASIZEBYTES: String(Math.max(1, aasxMetadataMiB.value) * MIB),
       GENERAL_AASXMAXPARTEXPANDEDSIZEBYTES: String(Math.max(1, aasxPartMiB.value) * MIB),
@@ -476,6 +496,7 @@ function resetToDefaults(): void {
   trustedProxyCidrs.value = DEFAULTS.trustedProxyCidrs;
   bulkBatchLimit.value = DEFAULTS.bulkBatchLimit;
   uploadMaxMiB.value = DEFAULTS.uploadMaxMiB;
+  delegatedResponseMaxMiB.value = DEFAULTS.delegatedResponseMaxMiB;
   aasxMaxPartCount.value = DEFAULTS.aasxMaxPartCount;
   aasxMetadataMiB.value = DEFAULTS.aasxMetadataMiB;
   aasxPartMiB.value = DEFAULTS.aasxPartMiB;

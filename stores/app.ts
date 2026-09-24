@@ -1,6 +1,7 @@
 // Utilities
 import * as yaml from 'js-yaml';
 import { defineStore } from 'pinia';
+import { readServiceEnvironment } from '@/utils/dockerEnvironment';
 import {
   buildAasEnvironmentExternalUrl,
   buildExternalServiceUrl,
@@ -15,6 +16,7 @@ import {
   replaceUrlPath,
 } from '@/utils/externalUrls';
 import { DEFAULT_POLICY, defaultTrustList } from '@/utils/securitySetup';
+import { getHttpOrigin, parseTrustedOrigin } from '@/utils/trustedOrigins';
 
 interface ContainerPort {
   id: string;
@@ -867,6 +869,35 @@ export const useAppStore = defineStore('app', {
         getContainerPortValue(state.containerPorts, 'aas-ui'),
         getContextPathValue(state.contextPathes, 'aas-ui')
       ),
+    getConfiguredInfluxDbOrigin: state => {
+      if (!state.timeSeriesData || !isRecord(state.dockerComposeConfig?.value)) {
+        return undefined;
+      }
+
+      const services = state.dockerComposeConfig.value.services;
+      if (!isRecord(services)) {
+        return undefined;
+      }
+
+      if (isRecord(services.influxdb)) {
+        const influxPort = getContainerPortValue(state.containerPorts, 'influxdb') ?? 8086;
+        const browserUrl = buildExternalServiceUrl(state.externalBaseUrl, influxPort);
+        try {
+          const url = new URL(browserUrl);
+          url.protocol = 'http:';
+          url.port = String(influxPort);
+          return getHttpOrigin(url.toString()) ?? undefined;
+        } catch {
+          return undefined;
+        }
+      }
+
+      const influxUrl = readServiceEnvironment(
+        state.dockerComposeConfig.value,
+        'telegraf'
+      ).INFLUX_URL;
+      return getHttpOrigin(influxUrl) ?? undefined;
+    },
     getAasDiscovery: state => state.aasDiscovery,
     getMQTT: state => state.mqtt,
     getTimeSeriesData: state => state.timeSeriesData,
@@ -1073,6 +1104,38 @@ export const useAppStore = defineStore('app', {
     },
     setBasyxInfraConfig(config: ConfigObject) {
       this.basyxInfraConfig = config;
+    },
+    updateDefaultInfrastructureTrustedOrigins(origins: readonly string[]): boolean {
+      const normalizedOrigins = origins.map(parseTrustedOrigin);
+      if (normalizedOrigins.some(origin => origin === null)) {
+        return false;
+      }
+
+      const currentConfig = this.basyxInfraConfig;
+      if (!currentConfig || !isRecord(currentConfig.value)) {
+        return false;
+      }
+
+      const updatedConfig = cloneSerializable(currentConfig);
+      if (!isRecord(updatedConfig.value) || !isRecord(updatedConfig.value.infrastructures)) {
+        return false;
+      }
+
+      const infrastructures = updatedConfig.value.infrastructures;
+      const defaultKey = infrastructures.default;
+      if (typeof defaultKey !== 'string' || !isRecord(infrastructures[defaultKey])) {
+        return false;
+      }
+
+      const infrastructure = infrastructures[defaultKey];
+      if (normalizedOrigins.length > 0) {
+        infrastructure.trustedOrigins = normalizedOrigins as string[];
+      } else {
+        delete infrastructure.trustedOrigins;
+      }
+      infrastructures[defaultKey] = infrastructure;
+      this.basyxInfraConfig = updatedConfig;
+      return true;
     },
     updateServiceEnvironment(
       serviceName: string,

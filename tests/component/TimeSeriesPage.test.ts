@@ -58,6 +58,7 @@ describe('Time Series page', () => {
     store.updateTimeSeriesData(true);
     const wrapper = mount(TimeSeriesPage, { global: { stubs } });
     await nextTick();
+    expect(wrapper.text()).toContain('API token alone does not authorize the Web UI');
     expect(services(store).influxdb).toBeDefined();
     expect(services(store).telegraf?.depends_on).toEqual(['influxdb']);
     expect((await store.getTelegrafConf?.text()) || '').toContain('${INFLUX_TOKEN}');

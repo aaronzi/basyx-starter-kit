@@ -50,6 +50,14 @@ docker compose up -d
 - A unique RSA private key is generated in your browser for this setup at \`basyx/rsa-key.pem\`.
 - Keep this private key confidential and replace it if you suspect it has been exposed.
 - Infrastructure connections for the UI are defined in \`basyx-infra.yml\`.
+- Add extra browser destinations to the selected infrastructure's \`trustedOrigins\` list as exact
+  HTTP(S) origins (scheme, host, and optional port only). Configured component origins, relative
+  URLs, and the deployed BaSyx Web UI's origin are trusted automatically.
+- Additional trusted origins may receive infrastructure credentials. List only destinations you
+  trust with these credentials. The InfluxDB LinkedSegment token does not make its destination
+  trusted.
+- Web UI backend requests do not follow redirects. Configure the final endpoint URL directly and
+  trust its origin when it is not already a configured component origin.
 - Place your own AAS files into the \`aas/\` folder or upload through the UI.
 
 ## BaSyx Go configuration

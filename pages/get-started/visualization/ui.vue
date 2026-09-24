@@ -74,6 +74,61 @@
             label="Allow endpoint configuration in the UI"
             @update:model-value="applyBehaviorSettings"
           />
+          <v-divider class="my-6" />
+          <v-textarea
+            v-model="trustedOriginsText"
+            variant="solo-filled"
+            label="Additional trusted origins"
+            hint="One HTTP(S) origin per line, without a path, query, or fragment."
+            persistent-hint
+            :rules="[trustedOriginsRule]"
+          />
+          <p class="text-normalText mt-3 mb-3 text-body-2">
+            Relative requests, the deployed BaSyx Web UI's origin, and configured component origins
+            are trusted automatically. Additional origins may receive the selected infrastructure's
+            credentials.
+          </p>
+          <v-alert
+            v-if="isTimeSeriesDataEnabled"
+            color="secondary"
+            variant="tonal"
+            class="mt-4 mb-3"
+          >
+            <template v-if="configuredInfluxOrigin">
+              The configured browser origin for InfluxDB is
+              <code>{{ configuredInfluxOrigin }}</code
+              >. <code>INFLUXDB_TOKEN</code> authenticates LinkedSegment requests, but does not make
+              their destination trusted. If Telegraf uses a different internal address, enter the
+              browser-accessible InfluxDB origin instead. The generated local container uses HTTP;
+              enter the public origin manually if a reverse proxy provides HTTPS.
+            </template>
+            <template v-else>
+              Enter the browser-accessible InfluxDB origin above. It may differ from the URL that
+              Telegraf uses inside Docker.
+            </template>
+          </v-alert>
+          <v-btn
+            v-if="configuredInfluxOrigin"
+            class="mr-3"
+            variant="tonal"
+            color="secondary"
+            :disabled="configuredInfluxOriginTrusted || !trustedOriginsAreValid"
+            @click="addConfiguredInfluxOrigin"
+          >
+            {{
+              configuredInfluxOriginTrusted
+                ? 'Configured InfluxDB origin added'
+                : 'Add configured InfluxDB origin'
+            }}
+          </v-btn>
+          <v-btn
+            variant="tonal"
+            color="primary"
+            :disabled="!trustedOriginsAreValid"
+            @click="applyTrustedOrigins"
+          >
+            Apply trusted origins
+          </v-btn>
         </v-expansion-panel-text>
       </v-expansion-panel>
     </v-expansion-panels>
@@ -97,6 +152,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useAppStore } from '@/stores/app';
+import { parseTrustedOriginsText } from '@/utils/trustedOrigins';
 
 interface BasyxConfigItem {
   id: string;
@@ -139,10 +195,20 @@ const allowUploading = ref(true);
 const allowLogout = ref(true);
 const smViewerEditor = ref(true);
 const startPageRouteName = ref('AASViewer');
+const trustedOriginsText = ref('');
 
 const basyxConfig = computed(() => appStore.getBasyxConfig);
 const isTimeSeriesDataEnabled = computed(() => appStore.getTimeSeriesData);
 const dockerComposeConfigObject = computed(() => appStore.getDockerComposeConfig);
+const basyxInfraConfigObject = computed(() => appStore.getBasyxInfraConfig);
+const configuredInfluxOrigin = computed(() => appStore.getConfiguredInfluxDbOrigin);
+const trustedOriginsAreValid = computed(
+  () => parseTrustedOriginsText(trustedOriginsText.value) !== null
+);
+const configuredInfluxOriginTrusted = computed(() => {
+  const origins = parseTrustedOriginsText(trustedOriginsText.value);
+  return Boolean(configuredInfluxOrigin.value && origins?.includes(configuredInfluxOrigin.value));
+});
 
 watch(
   () => dockerComposeConfigObject.value?.value,
@@ -151,6 +217,12 @@ watch(
     syncBehaviorSettingsFromCompose();
   },
   { immediate: true }
+);
+
+watch(
+  () => basyxInfraConfigObject.value?.value,
+  () => syncTrustedOriginsFromInfra(),
+  { immediate: true, deep: true }
 );
 
 function syncBehaviorSettingsFromCompose() {
@@ -166,6 +238,60 @@ function syncBehaviorSettingsFromCompose() {
       smViewerEditor.value = ui.environment.SM_VIEWER_EDITOR !== 'false';
       startPageRouteName.value = ui.environment.START_PAGE_ROUTE_NAME || 'AASViewer';
     }
+  }
+}
+
+function syncTrustedOriginsFromInfra(): void {
+  const config = basyxInfraConfigObject.value?.value;
+  if (!config || typeof config !== 'object' || !('infrastructures' in config)) {
+    trustedOriginsText.value = '';
+    return;
+  }
+
+  const infrastructures = config.infrastructures;
+  if (!infrastructures || typeof infrastructures !== 'object' || Array.isArray(infrastructures)) {
+    trustedOriginsText.value = '';
+    return;
+  }
+  const infrastructureRecords = infrastructures as Record<string, unknown>;
+  const defaultKey = infrastructureRecords.default;
+  const infrastructure =
+    typeof defaultKey === 'string' ? infrastructureRecords[defaultKey] : undefined;
+  if (!infrastructure || typeof infrastructure !== 'object') {
+    trustedOriginsText.value = '';
+    return;
+  }
+
+  const trustedOrigins = (infrastructure as Record<string, unknown>).trustedOrigins;
+  trustedOriginsText.value = Array.isArray(trustedOrigins)
+    ? trustedOrigins.filter(origin => typeof origin === 'string').join('\n')
+    : '';
+}
+
+function trustedOriginsRule(value: string): true | string {
+  return parseTrustedOriginsText(value) !== null
+    ? true
+    : 'Enter one HTTP(S) origin per line, without credentials, a path, query, or fragment.';
+}
+
+function applyTrustedOrigins(): void {
+  const origins = parseTrustedOriginsText(trustedOriginsText.value);
+  if (origins === null) {
+    return;
+  }
+  appStore.updateDefaultInfrastructureTrustedOrigins(origins);
+}
+
+function addConfiguredInfluxOrigin(): void {
+  const origins = parseTrustedOriginsText(trustedOriginsText.value);
+  const influxOrigin = configuredInfluxOrigin.value;
+  if (origins === null || !influxOrigin) {
+    return;
+  }
+
+  const updatedOrigins = [...new Set([...origins, influxOrigin])];
+  if (appStore.updateDefaultInfrastructureTrustedOrigins(updatedOrigins)) {
+    trustedOriginsText.value = updatedOrigins.join('\n');
   }
 }
 

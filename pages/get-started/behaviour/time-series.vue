@@ -203,6 +203,15 @@
           Reset InfluxDB Defaults
         </v-btn>
 
+        <v-alert color="secondary" variant="tonal" class="mb-8">
+          On the next page, open <strong>Expert: infrastructure endpoint management</strong> and add
+          the configured InfluxDB origin to the infrastructure trust list. The API token alone does
+          not authorize the Web UI to contact that origin. For an external database, use its
+          browser-accessible origin if that differs from the URL reachable inside Telegraf. The
+          generated local container uses HTTP; enter the public origin manually if you expose it
+          through an HTTPS reverse proxy.
+        </v-alert>
+
         <v-divider class="mt-12 mb-8" />
         <h2 class="text-header">Metrics Collection</h2>
         <p class="text-normalText mt-8 mb-5 text-subtitle-1">

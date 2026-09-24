@@ -29,7 +29,7 @@
         target="_blank"
         >InfluxDB</a
       >
-      is used as a time series database in conjunction with
+      is used as a time series database, optionally with
       <a
         class="text-primary"
         style="text-decoration: none"
@@ -57,14 +57,14 @@
         <v-divider class="mt-12 mb-8" />
         <h2 class="text-header">InfluxDB Settings</h2>
         <p class="text-normalText mt-8 mb-5 text-subtitle-1">
-          Include a local InfluxDB container or connect Telegraf to an existing instance. The API
-          token is also passed to the BaSyx UI when it is enabled.
+          Include a local InfluxDB container or connect to an existing instance. The API token is
+          also passed to the BaSyx UI when it is enabled.
         </p>
         <v-switch
           v-model="includeLocalInfluxdb"
           label="Include local InfluxDB container"
           color="primary"
-          hint="Turn off to use an existing InfluxDB instance reachable from the Telegraf container."
+          hint="Turn off to use an existing InfluxDB instance."
           persistent-hint
           @update:model-value="onInfluxModeChange"
         />
@@ -142,9 +142,13 @@
             <v-text-field
               v-model="externalInfluxUrl"
               variant="solo-filled"
-              label="InfluxDB URL for Telegraf"
+              label="External InfluxDB URL"
               placeholder="https://influx.example.org:8086"
-              hint="Use an address reachable from inside the Telegraf container, not localhost."
+              :hint="
+                includeTelegraf
+                  ? 'Use an address reachable from inside the Telegraf container, not localhost.'
+                  : 'Use the address required by your deployed consumers.'
+              "
               persistent-hint
               :error="!externalInfluxUrl.trim()"
             />
@@ -164,7 +168,7 @@
               :hint="
                 includeLocalInfluxdb
                   ? 'Admin token shared with BaSyx UI as INFLUXDB_TOKEN.'
-                  : 'Required for Telegraf writes and shared with BaSyx UI as INFLUXDB_TOKEN.'
+                  : 'Used by configured consumers and shared with BaSyx UI as INFLUXDB_TOKEN.'
               "
               persistent-hint
               :error="!includeLocalInfluxdb && !influxInitToken.trim()"
@@ -220,34 +224,45 @@
 
         <v-divider class="mt-12 mb-8" />
         <h2 class="text-header">Metrics Collection</h2>
-        <p class="text-normalText mt-8 mb-5 text-subtitle-1">
-          Telegraf is configured using a configuration file. This file contains the necessary
-          information about the asset endpoints that provide data to be stored in the time series
-          database.
-        </p>
-        <p class="text-normalText mt-3 mb-6 text-subtitle-1">
-          Edit the starter TOML below or upload an existing <code>telegraf.conf</code>. The starter
-          collects Telegraf's own metrics; replace its input plugin with one for your asset. The
-          InfluxDB token is passed through an environment variable, not stored in this file.
-        </p>
-        <v-file-input
-          v-model="telegrafConfigFile"
-          variant="solo-filled"
-          prepend-inner-icon="$file"
-          prepend-icon=""
-          label="Upload telegraf.conf File"
-          accept=".conf,.toml,text/plain"
-          density="compact"
-          hide-details
-          @update:model-value="loadTelegrafConf()"
+        <v-switch
+          v-model="includeTelegraf"
+          label="Include local Telegraf collector"
+          color="primary"
+          hint="Turn off if no collector is needed or metrics are collected outside this setup."
+          persistent-hint
+          @update:model-value="onTelegrafModeChange"
         />
-        <label class="d-block mt-5 mb-2 text-body-2">Telegraf configuration (TOML)</label>
-        <TelegrafConfigEditor v-model="telegrafConfigText" :error="Boolean(telegrafError)" />
-        <p v-if="telegrafError" class="text-error text-body-2 mt-2">{{ telegrafError }}</p>
-        <p class="text-medium-emphasis text-caption mt-2">
-          TOML syntax and input/output sections are checked here. Plugin-specific options should
-          also be checked with Telegraf before deployment.
-        </p>
+        <div v-if="includeTelegraf">
+          <p class="text-normalText mt-8 mb-5 text-subtitle-1">
+            Telegraf is configured using a configuration file. This file contains the necessary
+            information about the asset endpoints that provide data to be stored in the time series
+            database.
+          </p>
+          <p class="text-normalText mt-3 mb-6 text-subtitle-1">
+            Edit the starter TOML below or upload an existing <code>telegraf.conf</code>. The
+            starter collects Telegraf's own metrics; replace its input plugin with one for your
+            asset. The InfluxDB token is passed through an environment variable, not stored in this
+            file.
+          </p>
+          <v-file-input
+            v-model="telegrafConfigFile"
+            variant="solo-filled"
+            prepend-inner-icon="$file"
+            prepend-icon=""
+            label="Upload telegraf.conf File"
+            accept=".conf,.toml,text/plain"
+            density="compact"
+            hide-details
+            @update:model-value="loadTelegrafConf()"
+          />
+          <label class="d-block mt-5 mb-2 text-body-2">Telegraf configuration (TOML)</label>
+          <TelegrafConfigEditor v-model="telegrafConfigText" :error="Boolean(telegrafError)" />
+          <p v-if="telegrafError" class="text-error text-body-2 mt-2">{{ telegrafError }}</p>
+          <p class="text-medium-emphasis text-caption mt-2">
+            TOML syntax and input/output sections are checked here. Plugin-specific options should
+            also be checked with Telegraf before deployment.
+          </p>
+        </div>
       </div>
     </v-slide-y-transition>
 
@@ -260,7 +275,10 @@
         variant="tonal"
         color="primary"
         append-icon="mdi-arrow-right"
-        :disabled="selection === 'addTSD' && (Boolean(telegrafError) || !influxSettingsValid)"
+        :disabled="
+          selection === 'addTSD' &&
+          ((includeTelegraf && Boolean(telegrafError)) || !influxSettingsValid)
+        "
         @click="goNext"
         >Next</v-btn
       >
@@ -343,7 +361,9 @@ const selection = computed({
 const telegrafConfigFile = ref<File | undefined>(undefined);
 const telegrafConfigText = ref('');
 const telegrafError = computed(() =>
-  hasMounted.value ? validateTelegrafConfig(telegrafConfigText.value).message : undefined
+  hasMounted.value && includeTelegraf.value
+    ? validateTelegrafConfig(telegrafConfigText.value).message
+    : undefined
 );
 const initialServices = (() => {
   const value = appStore.getDockerComposeConfig?.value;
@@ -351,24 +371,55 @@ const initialServices = (() => {
     ? (value.services as Record<string, DockerService>)
     : {};
 })();
-const includeLocalInfluxdb = ref(Boolean(initialServices.influxdb) || !initialServices.telegraf);
+const storedExternalInfluxSettings = appStore.getExternalInfluxSettings;
 const initialExternalEnv =
   initialServices.telegraf && !initialServices.influxdb
     ? getInfluxEnvAsArray(initialServices.telegraf)
     : [];
-const externalInfluxUrl = ref(getEnvVar(initialExternalEnv, 'INFLUX_URL', ''));
+const initialLocalEnv = initialServices.influxdb
+  ? getInfluxEnvAsArray(initialServices.influxdb)
+  : [];
+const initialExternalSettings = appStore.getIncludeLocalInfluxDb
+  ? { url: '', org: '', bucket: '', token: '' }
+  : storedExternalInfluxSettings;
+const includeLocalInfluxdb = ref(appStore.getIncludeLocalInfluxDb);
+const includeTelegraf = ref(appStore.getIncludeTelegraf);
+const externalInfluxUrl = ref(
+  initialExternalSettings.url || getEnvVar(initialExternalEnv, 'INFLUX_URL', '')
+);
 const influxSettingsValid = computed(
   () =>
     includeLocalInfluxdb.value ||
     (Boolean(externalInfluxUrl.value.trim()) && Boolean(influxInitToken.value.trim()))
 );
-const influxInitUsername = ref(INFLUX_DEFAULTS.username);
-const influxInitPassword = ref(INFLUX_DEFAULTS.password);
-const influxInitOrg = ref(getEnvVar(initialExternalEnv, 'INFLUX_ORG', INFLUX_DEFAULTS.org));
-const influxInitBucket = ref(
-  getEnvVar(initialExternalEnv, 'INFLUX_BUCKET', INFLUX_DEFAULTS.bucket)
+const influxInitUsername = ref(
+  getEnvVar(initialLocalEnv, 'DOCKER_INFLUXDB_INIT_USERNAME', INFLUX_DEFAULTS.username)
 );
-const influxInitToken = ref(getEnvVar(initialExternalEnv, 'INFLUX_TOKEN', ''));
+const influxInitPassword = ref(
+  getEnvVar(initialLocalEnv, 'DOCKER_INFLUXDB_INIT_PASSWORD', INFLUX_DEFAULTS.password)
+);
+const influxInitOrg = ref(
+  getEnvVar(
+    initialLocalEnv,
+    'DOCKER_INFLUXDB_INIT_ORG',
+    initialExternalSettings.org || getEnvVar(initialExternalEnv, 'INFLUX_ORG', INFLUX_DEFAULTS.org)
+  )
+);
+const influxInitBucket = ref(
+  getEnvVar(
+    initialLocalEnv,
+    'DOCKER_INFLUXDB_INIT_BUCKET',
+    initialExternalSettings.bucket ||
+      getEnvVar(initialExternalEnv, 'INFLUX_BUCKET', INFLUX_DEFAULTS.bucket)
+  )
+);
+const influxInitToken = ref(
+  getEnvVar(
+    initialLocalEnv,
+    'DOCKER_INFLUXDB_INIT_ADMIN_TOKEN',
+    initialExternalSettings.token || getEnvVar(initialExternalEnv, 'INFLUX_TOKEN', '')
+  )
+);
 const showInfluxPassword = ref(false);
 const showInfluxToken = ref(false);
 const hasMounted = ref(false);
@@ -388,7 +439,7 @@ watch(
 
 watch(telegrafConfigText, text => {
   appStore.setTelegrafConf(
-    validateTelegrafConfig(text).message
+    !includeTelegraf.value || validateTelegrafConfig(text).message
       ? undefined
       : new File([text], 'telegraf.conf', { type: 'text/plain' })
   );
@@ -410,6 +461,9 @@ onMounted(async () => {
     telegrafConfigText.value = await telegrafConfigStore.value.text();
   } else {
     telegrafConfigText.value = defaultTelegrafConfig();
+  }
+  if (!includeTelegraf.value) {
+    appStore.setTelegrafConf(undefined);
   }
 });
 
@@ -619,14 +673,14 @@ function syncInfluxSettingsFromCompose(): void {
 
   const influxService = compose.services['influxdb'];
   if (!influxService) {
-    if (compose.services.telegraf) {
-      includeLocalInfluxdb.value = false;
-      const env = getInfluxEnvAsArray(compose.services.telegraf);
-      externalInfluxUrl.value = getEnvVar(env, 'INFLUX_URL', '');
-      influxInitOrg.value = getEnvVar(env, 'INFLUX_ORG', INFLUX_DEFAULTS.org);
-      influxInitBucket.value = getEnvVar(env, 'INFLUX_BUCKET', INFLUX_DEFAULTS.bucket);
-      influxInitToken.value = getEnvVar(env, 'INFLUX_TOKEN', '');
-    }
+    const stored = appStore.getExternalInfluxSettings;
+    const env = compose.services.telegraf ? getInfluxEnvAsArray(compose.services.telegraf) : [];
+    const url = stored.url || getEnvVar(env, 'INFLUX_URL', '');
+    externalInfluxUrl.value = url;
+    influxInitOrg.value = stored.org || getEnvVar(env, 'INFLUX_ORG', INFLUX_DEFAULTS.org);
+    influxInitBucket.value =
+      stored.bucket || getEnvVar(env, 'INFLUX_BUCKET', INFLUX_DEFAULTS.bucket);
+    influxInitToken.value = stored.token || getEnvVar(env, 'INFLUX_TOKEN', '');
     return;
   }
 
@@ -657,7 +711,15 @@ function addInfluxDBToDockerCompose(createFreshTokenIfMissing = true): void {
   const settings = normalizeInfluxSettings();
   if (includeLocalInfluxdb.value)
     upsertInfluxService(compose.services, settings, createFreshTokenIfMissing);
-  else delete compose.services.influxdb;
+  else {
+    delete compose.services.influxdb;
+    appStore.updateExternalInfluxSettings({
+      url: externalInfluxUrl.value,
+      org: settings.org,
+      bucket: settings.bucket,
+      token: settings.token,
+    });
+  }
 
   const influxService = compose.services.influxdb;
   const env = influxService ? getInfluxEnvAsArray(influxService) : [];
@@ -741,7 +803,7 @@ function applyInfluxSettings(): void {
 
 function goNext(): void {
   if (selection.value === 'addTSD') {
-    if (telegrafError.value || !influxSettingsValid.value) return;
+    if ((includeTelegraf.value && telegrafError.value) || !influxSettingsValid.value) return;
     applyInfluxSettings();
   }
   navigateTo('/get-started/visualization/ui');
@@ -749,12 +811,34 @@ function goNext(): void {
 
 function onInfluxModeChange(): void {
   // An external provider must supply its own token; never reuse a generated local admin token.
+  appStore.updateIncludeLocalInfluxDb(includeLocalInfluxdb.value);
   influxInitToken.value = includeLocalInfluxdb.value ? createInfluxToken() : '';
   if (appStore.getTimeSeriesData) {
     addInfluxDBToDockerCompose(false);
-    addTelegrafToDockerCompose();
+    if (includeTelegraf.value) addTelegrafToDockerCompose();
+    else removeTelegrafFromDockerCompose();
     updateInfluxConfigItem();
   }
+}
+
+function onTelegrafModeChange(): void {
+  appStore.updateIncludeTelegraf(includeTelegraf.value);
+  if (!appStore.getTimeSeriesData) return;
+
+  addInfluxDBToDockerCompose(false);
+  if (includeTelegraf.value) {
+    addTelegrafToDockerCompose();
+    if (!telegrafConfigText.value) telegrafConfigText.value = defaultTelegrafConfig();
+    if (!validateTelegrafConfig(telegrafConfigText.value).message) {
+      appStore.setTelegrafConf(
+        new File([telegrafConfigText.value], 'telegraf.conf', { type: 'text/plain' })
+      );
+    }
+  } else {
+    removeTelegrafFromDockerCompose();
+    appStore.setTelegrafConf(undefined);
+  }
+  updateTelegrafConfigItem();
 }
 
 function regenerateInfluxToken(): void {
@@ -790,6 +874,21 @@ function updateInfluxConfigItem(): void {
   appStore.updateBasyxConfig(items);
 }
 
+function updateTelegrafConfigItem(): void {
+  const items = basyxConfig.value.filter((item: BasyxConfigItem) => item.id !== 'comp-telegraf');
+  if (appStore.getTimeSeriesData && includeTelegraf.value) {
+    items.push({
+      id: 'comp-telegraf',
+      title: 'Telegraf',
+      children: [
+        { id: 'ovw-telegraf-summary', title: 'Collector Setup', type: 'overview' },
+        { id: 'cfg-telegraf', title: 'Docker', type: 'config' },
+      ],
+    });
+  }
+  appStore.updateBasyxConfig(items);
+}
+
 async function loadTelegrafConf(): Promise<void> {
   const file = telegrafConfigFile.value;
   if (file) telegrafConfigText.value = await file.text();
@@ -798,7 +897,8 @@ async function loadTelegrafConf(): Promise<void> {
 function updateConfig(enabled = appStore.getTimeSeriesData): void {
   if (enabled) {
     addInfluxDBToDockerCompose(true);
-    addTelegrafToDockerCompose();
+    if (includeTelegraf.value) addTelegrafToDockerCompose();
+    else removeTelegrafFromDockerCompose();
 
     const basyxConfigCopy = [...basyxConfig.value];
 
@@ -828,7 +928,10 @@ function updateConfig(enabled = appStore.getTimeSeriesData): void {
       if (index !== -1) basyxConfigCopy.splice(index, 1);
     }
 
-    if (!basyxConfigCopy.some((item: BasyxConfigItem) => item.id === 'comp-telegraf')) {
+    if (
+      includeTelegraf.value &&
+      !basyxConfigCopy.some((item: BasyxConfigItem) => item.id === 'comp-telegraf')
+    ) {
       basyxConfigCopy.push({
         id: 'comp-telegraf',
         title: 'Telegraf',
@@ -845,6 +948,10 @@ function updateConfig(enabled = appStore.getTimeSeriesData): void {
           },
         ],
       });
+    }
+    if (!includeTelegraf.value) {
+      const index = basyxConfigCopy.findIndex(item => item.id === 'comp-telegraf');
+      if (index !== -1) basyxConfigCopy.splice(index, 1);
     }
 
     appStore.updateBasyxConfig(basyxConfigCopy);

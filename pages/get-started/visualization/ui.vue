@@ -302,16 +302,28 @@ function addConfiguredInfluxOrigin(): void {
 }
 
 function readInfluxTokenFromCompose(services: Record<string, DockerService>): string | undefined {
-  const influxService = services.influxdb || services.telegraf;
-  const key = services.influxdb ? 'DOCKER_INFLUXDB_INIT_ADMIN_TOKEN' : 'INFLUX_TOKEN';
-  if (!influxService?.environment) return undefined;
+  const influxService = services.influxdb;
+  if (!influxService?.environment) {
+    return appStore.getExternalInfluxSettings.token || readTelegrafInfluxToken(services.telegraf);
+  }
 
   if (Array.isArray(influxService.environment)) {
-    const entry = influxService.environment.find(item => item.startsWith(`${key}=`));
+    const entry = influxService.environment.find(item =>
+      item.startsWith('DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=')
+    );
     return entry ? entry.split('=').slice(1).join('=') : undefined;
   }
 
-  return influxService.environment[key];
+  return influxService.environment.DOCKER_INFLUXDB_INIT_ADMIN_TOKEN;
+}
+
+function readTelegrafInfluxToken(service: DockerService | undefined): string | undefined {
+  if (!service?.environment) return undefined;
+  if (Array.isArray(service.environment)) {
+    const entry = service.environment.find(item => item.startsWith('INFLUX_TOKEN='));
+    return entry ? entry.split('=').slice(1).join('=') : undefined;
+  }
+  return service.environment.INFLUX_TOKEN;
 }
 
 function ensureUIService() {

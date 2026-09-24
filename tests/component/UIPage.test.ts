@@ -59,7 +59,7 @@ describe('UI page', () => {
     setActivePinia(createPinia());
   });
 
-  it('uses the external Telegraf InfluxDB token when creating the UI service', () => {
+  it('uses the external InfluxDB token when no local database or collector exists', () => {
     const store = useAppStore();
     store.initializeStarterDefaults();
     store.updateTimeSeriesData(true);
@@ -68,10 +68,17 @@ describe('UI page', () => {
       services: Record<string, { environment?: string[] | Record<string, string> }>;
     };
     delete value.services['aas-ui'];
-    value.services.telegraf = {
-      environment: ['INFLUX_URL=https://influx.example.org', 'INFLUX_TOKEN=test-token'],
-    };
+    delete value.services.influxdb;
+    delete value.services.telegraf;
     store.setDockerComposeConfig({ name: 'docker-compose.yml', value });
+    store.updateIncludeLocalInfluxDb(false);
+    store.updateIncludeTelegraf(false);
+    store.updateExternalInfluxSettings({
+      url: 'https://influx.example.org',
+      org: 'basyx',
+      bucket: 'basyx',
+      token: 'test-token',
+    });
 
     mount(UIPage, {
       global: {
@@ -101,6 +108,7 @@ describe('UI page', () => {
 
     const ui = (store.getDockerComposeConfig?.value as typeof value).services['aas-ui'];
     expect(ui?.environment).toHaveProperty('INFLUXDB_TOKEN', 'test-token');
+    expect(store.getConfiguredInfluxDbOrigin).toBe('https://influx.example.org');
   });
 
   it('reflects late docker-compose hydration updates while page is open', async () => {

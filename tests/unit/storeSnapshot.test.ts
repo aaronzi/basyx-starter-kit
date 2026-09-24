@@ -40,6 +40,79 @@ describe('app store snapshot helpers', () => {
     expect(store.getDiscoveryIntegration).toBe(true);
   });
 
+  it('persists collector and Influx modes while stripping the external token from shares', () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    expect(store.getIncludeTelegraf).toBe(false);
+    store.updateTimeSeriesData(true);
+    store.updateIncludeLocalInfluxDb(false);
+    store.updateIncludeTelegraf(false);
+    store.updateExternalInfluxSettings({
+      url: 'https://influx.example.org',
+      org: 'example-org',
+      bucket: 'example-bucket',
+      token: 'private-influx-token',
+    });
+
+    const encoded = encodeConfigHash({
+      route: '/get-started/behaviour/time-series',
+      state: store.createSerializableSnapshot(),
+    });
+    const decoded = decodeConfigHash(encoded);
+    expect(JSON.stringify(decoded.payload)).not.toContain('private-influx-token');
+    expect(decoded.payload?.state.externalInfluxSettings).toEqual({
+      url: 'https://influx.example.org',
+      org: 'example-org',
+      bucket: 'example-bucket',
+    });
+
+    store.reset();
+    store.initializeStarterDefaults();
+    store.applySerializableSnapshot(decoded.payload?.state);
+    expect(store.getIncludeLocalInfluxDb).toBe(false);
+    expect(store.getIncludeTelegraf).toBe(false);
+    expect(store.getExternalInfluxSettings).toEqual({
+      url: 'https://influx.example.org',
+      org: 'example-org',
+      bucket: 'example-bucket',
+      token: '',
+    });
+  });
+
+  it('infers Telegraf and external Influx modes from legacy snapshots', () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    const legacy = store.createSerializableSnapshot();
+    legacy.timeSeriesData = true;
+    delete legacy.includeTelegraf;
+    delete legacy.includeLocalInfluxDb;
+    delete legacy.externalInfluxSettings;
+    const compose = legacy.dockerComposeConfig?.value as {
+      services: Record<string, unknown>;
+    };
+    compose.services.telegraf = {
+      environment: [
+        'INFLUX_URL=https://legacy-influx.example.org',
+        'INFLUX_ORG=legacy-org',
+        'INFLUX_BUCKET=legacy-bucket',
+        'INFLUX_TOKEN=legacy-token',
+      ],
+    };
+
+    store.reset();
+    store.initializeStarterDefaults();
+    store.applySerializableSnapshot(legacy);
+
+    expect(store.getIncludeTelegraf).toBe(true);
+    expect(store.getIncludeLocalInfluxDb).toBe(false);
+    expect(store.getExternalInfluxSettings).toEqual({
+      url: 'https://legacy-influx.example.org',
+      org: 'legacy-org',
+      bucket: 'legacy-bucket',
+      token: 'legacy-token',
+    });
+  });
+
   it('migrates legacy snapshots with current generated defaults', () => {
     const store = useAppStore();
     store.initializeStarterDefaults();

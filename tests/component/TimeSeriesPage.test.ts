@@ -50,12 +50,16 @@ function services(store: ReturnType<typeof useAppStore>) {
 }
 
 describe('Time Series page', () => {
-  beforeEach(() => setActivePinia(createPinia()));
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
 
   it('creates local services and an editable starter file, then connects externally without a local InfluxDB', async () => {
     const store = useAppStore();
     store.initializeStarterDefaults();
     store.updateTimeSeriesData(true);
+    store.updateIncludeTelegraf(true);
     const wrapper = mount(TimeSeriesPage, { global: { stubs } });
     await nextTick();
     expect(wrapper.text()).toContain('automatically adds the local InfluxDB container');
@@ -63,6 +67,21 @@ describe('Time Series page', () => {
     expect(store.getBasyxInfraConfigAsString.value).toContain('http://localhost:8086');
     expect(services(store).telegraf?.depends_on).toEqual(['influxdb']);
     expect((await store.getTelegrafConf?.text()) || '').toContain('${INFLUX_TOKEN}');
+    const localToken = services(store).influxdb?.environment?.find(entry =>
+      entry.startsWith('DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=')
+    );
+
+    await wrapper.find('input[data-label="Include local Telegraf collector"]').setValue(false);
+    expect(services(store).telegraf).toBeUndefined();
+    expect(store.getBasyxConfig.some(item => item.id === 'comp-telegraf')).toBe(false);
+    expect(
+      services(store).influxdb?.environment?.find(entry =>
+        entry.startsWith('DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=')
+      )
+    ).toBe(localToken);
+
+    await wrapper.find('input[data-label="Include local Telegraf collector"]').setValue(true);
+    expect(services(store).telegraf?.depends_on).toEqual(['influxdb']);
 
     await wrapper.find('input[data-label="Include local InfluxDB container"]').setValue(false);
     expect(services(store).influxdb).toBeUndefined();
@@ -70,7 +89,7 @@ describe('Time Series page', () => {
     expect(store.getBasyxConfig.some(item => item.id === 'comp-influxdb')).toBe(false);
 
     await wrapper
-      .find('input[data-label="InfluxDB URL for Telegraf"]')
+      .find('input[data-label="External InfluxDB URL"]')
       .setValue('https://influx.example.org');
     await wrapper
       .find('input[data-label="External InfluxDB API token"]')
@@ -90,7 +109,7 @@ describe('Time Series page', () => {
     const restored = mount(TimeSeriesPage, { global: { stubs } });
     await nextTick();
     expect(services(store).influxdb).toBeUndefined();
-    expect(restored.find('input[data-label="InfluxDB URL for Telegraf"]').element).toHaveProperty(
+    expect(restored.find('input[data-label="External InfluxDB URL"]').element).toHaveProperty(
       'value',
       'https://influx.example.org'
     );
@@ -99,5 +118,78 @@ describe('Time Series page', () => {
     await restored.find('input[data-label="Include local InfluxDB container"]').setValue(true);
     expect(services(store).influxdb).toBeDefined();
     expect(services(store).telegraf?.depends_on).toEqual(['influxdb']);
+    const regeneratedLocalToken = services(store).influxdb?.environment?.find(entry =>
+      entry.startsWith('DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=')
+    );
+    expect(regeneratedLocalToken).toBeTruthy();
+    expect(regeneratedLocalToken).not.toContain('external-token');
+
+    restored.unmount();
+    const localRestored = mount(TimeSeriesPage, { global: { stubs } });
+    await nextTick();
+    expect(
+      services(store).influxdb?.environment?.find(entry =>
+        entry.startsWith('DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=')
+      )
+    ).toBe(regeneratedLocalToken);
+    localRestored.unmount();
+  });
+
+  it('keeps InfluxDB configured when the local Telegraf collector is omitted', async () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    store.updateTimeSeriesData(true);
+    const wrapper = mount(TimeSeriesPage, { global: { stubs } });
+    await nextTick();
+
+    expect(
+      (
+        wrapper.find('input[data-label="Include local Telegraf collector"]')
+          .element as HTMLInputElement
+      ).checked
+    ).toBe(false);
+    expect(store.getIncludeTelegraf).toBe(false);
+    expect(services(store).influxdb).toBeDefined();
+    expect(services(store).telegraf).toBeUndefined();
+    expect(store.getBasyxConfig.some(item => item.id === 'comp-telegraf')).toBe(false);
+    expect(wrapper.text()).not.toContain('Telegraf configuration (TOML)');
+
+    await wrapper.find('input[data-label="Include local InfluxDB container"]').setValue(false);
+    await wrapper
+      .find('input[data-label="External InfluxDB URL"]')
+      .setValue('https://external-influx.example.org');
+    await wrapper
+      .find('input[data-label="External InfluxDB API token"]')
+      .setValue('external-token');
+    await wrapper
+      .findAll('button')
+      .find(button => button.text().includes('Next'))
+      ?.trigger('click');
+    await nextTick();
+
+    expect(services(store).influxdb).toBeUndefined();
+    expect(services(store).telegraf).toBeUndefined();
+    expect(store.getExternalInfluxSettings).toEqual({
+      url: 'https://external-influx.example.org',
+      org: 'basyx',
+      bucket: 'basyx',
+      token: 'external-token',
+    });
+    expect(store.getConfiguredInfluxDbOrigin).toBe('https://external-influx.example.org');
+    expect(navigateTo).toHaveBeenCalledWith('/get-started/visualization/ui');
+
+    wrapper.unmount();
+    const restored = mount(TimeSeriesPage, { global: { stubs } });
+    await nextTick();
+    expect(
+      (
+        restored.find('input[data-label="Include local Telegraf collector"]')
+          .element as HTMLInputElement
+      ).checked
+    ).toBe(false);
+    expect(restored.find('input[data-label="External InfluxDB URL"]').element).toHaveProperty(
+      'value',
+      'https://external-influx.example.org'
+    );
   });
 });

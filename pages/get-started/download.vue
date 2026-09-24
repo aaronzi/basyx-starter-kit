@@ -161,30 +161,17 @@ async function downloadAsZip(): Promise<void> {
       'Enter the external AMQP password on the Eventing page before downloading, or clear the username for anonymous access.';
     return;
   }
-  if (isTimeSeriesDataEnabled.value && !telegrafConfigStore.value) {
+  if (composeServices.telegraf && !telegrafConfigStore.value) {
     downloadError.value =
       'Configure a valid Telegraf TOML file on the Time Series Data page before downloading.';
     return;
   }
-  if (isTimeSeriesDataEnabled.value) {
-    const value = appStore.getDockerComposeConfig?.value;
-    if (value && typeof value === 'object' && 'services' in value) {
-      const services = value.services as Record<
-        string,
-        { environment?: string[] | Record<string, string> }
-      >;
-      if (!services.influxdb) {
-        const env = services.telegraf?.environment;
-        const read = (key: string) =>
-          Array.isArray(env)
-            ? env.find(item => item.startsWith(`${key}=`))?.slice(key.length + 1)
-            : env?.[key];
-        if (!read('INFLUX_URL')?.trim() || !read('INFLUX_TOKEN')?.trim()) {
-          downloadError.value =
-            'Enter the external InfluxDB URL and API token on the Time Series Data page before downloading.';
-          return;
-        }
-      }
+  if (isTimeSeriesDataEnabled.value && !composeServices.influxdb) {
+    const { url, token } = appStore.getExternalInfluxSettings;
+    if (!url.trim() || !token.trim()) {
+      downloadError.value =
+        'Enter the external InfluxDB URL and API token on the Time Series Data page before downloading.';
+      return;
     }
   }
 
@@ -225,7 +212,7 @@ async function downloadAsZip(): Promise<void> {
       adminPassword,
     });
 
-    if (isTimeSeriesDataEnabled.value) {
+    if (services.telegraf) {
       const telegrafFolder = zip.folder('telegraf');
       if (telegrafConfigStore.value) {
         telegrafFolder?.file('telegraf.conf', telegrafConfigStore.value);

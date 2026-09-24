@@ -55,6 +55,13 @@ interface ManagedInfluxDbOrigin {
   origin: string;
 }
 
+export interface ExternalInfluxSettings {
+  url: string;
+  org: string;
+  bucket: string;
+  token: string;
+}
+
 interface DockerComposeService {
   ports?: string[];
   environment?: Record<string, string> | string[];
@@ -68,6 +75,9 @@ export interface SerializableStarterState {
   externalBaseUrl: string;
   mqtt: boolean;
   timeSeriesData: boolean;
+  includeTelegraf?: boolean;
+  includeLocalInfluxDb?: boolean;
+  externalInfluxSettings?: ExternalInfluxSettings;
   userInterface: boolean;
   dashboard: boolean;
   aasDiscovery: boolean;
@@ -116,6 +126,34 @@ function getDockerComposeServices(
 
 function hasLocalInfluxDb(config: ConfigObject | undefined): boolean {
   return isRecord(getDockerComposeServices(config)?.influxdb);
+}
+
+function hasTelegraf(config: ConfigObject | undefined): boolean {
+  return isRecord(getDockerComposeServices(config)?.telegraf);
+}
+
+function readExternalInfluxSettings(
+  config: ConfigObject | undefined
+): Partial<ExternalInfluxSettings> | undefined {
+  if (!hasTelegraf(config) || hasLocalInfluxDb(config)) {
+    return undefined;
+  }
+  const environment = readServiceEnvironment(config?.value, 'telegraf');
+  return {
+    url: environment.INFLUX_URL,
+    org: environment.INFLUX_ORG,
+    bucket: environment.INFLUX_BUCKET,
+    token: environment.INFLUX_TOKEN,
+  };
+}
+
+function isExternalInfluxSettings(value: unknown): value is Partial<ExternalInfluxSettings> {
+  return (
+    isRecord(value) &&
+    ['url', 'org', 'bucket', 'token'].every(
+      key => value[key] === undefined || typeof value[key] === 'string'
+    )
+  );
 }
 
 function getLocalInfluxDbOrigin(
@@ -810,6 +848,14 @@ function initialState() {
     externalBaseUrl: DEFAULT_EXTERNAL_BASE_URL,
     mqtt: false,
     timeSeriesData: false,
+    includeTelegraf: false,
+    includeLocalInfluxDb: true,
+    externalInfluxSettings: {
+      url: '',
+      org: 'basyx',
+      bucket: 'basyx',
+      token: '',
+    } as ExternalInfluxSettings,
     userInterface: true,
     dashboard: false,
     aasDiscovery: true,
@@ -961,16 +1007,13 @@ export const useAppStore = defineStore('app', {
         getContextPathValue(state.contextPathes, 'aas-ui')
       ),
     getConfiguredInfluxDbOrigin: state => {
-      if (!state.timeSeriesData || !isRecord(state.dockerComposeConfig?.value)) {
+      if (!state.timeSeriesData) {
         return undefined;
       }
 
-      const services = state.dockerComposeConfig.value.services;
-      if (!isRecord(services)) {
-        return undefined;
-      }
+      const services = getDockerComposeServices(state.dockerComposeConfig);
 
-      if (isRecord(services.influxdb)) {
+      if (isRecord(services?.influxdb)) {
         return getLocalInfluxDbOrigin(
           state.timeSeriesData,
           state.externalBaseUrl,
@@ -979,15 +1022,17 @@ export const useAppStore = defineStore('app', {
         );
       }
 
-      const influxUrl = readServiceEnvironment(
-        state.dockerComposeConfig.value,
-        'telegraf'
-      ).INFLUX_URL;
+      const influxUrl =
+        state.externalInfluxSettings.url ||
+        readServiceEnvironment(state.dockerComposeConfig?.value, 'telegraf').INFLUX_URL;
       return getHttpOrigin(influxUrl) ?? undefined;
     },
     getAasDiscovery: state => state.aasDiscovery,
     getMQTT: state => state.mqtt,
     getTimeSeriesData: state => state.timeSeriesData,
+    getIncludeTelegraf: state => state.includeTelegraf,
+    getIncludeLocalInfluxDb: state => state.includeLocalInfluxDb,
+    getExternalInfluxSettings: state => state.externalInfluxSettings,
     getUserInterface: state => state.userInterface,
     getDashboard: state => state.dashboard,
     getSyncBranding: state => state.syncBranding,
@@ -1118,6 +1163,20 @@ export const useAppStore = defineStore('app', {
       this.timeSeriesData = value;
       this.syncManagedLocalInfluxDbOrigin();
     },
+    updateIncludeTelegraf(value: boolean) {
+      this.includeTelegraf = value;
+    },
+    updateIncludeLocalInfluxDb(value: boolean) {
+      this.includeLocalInfluxDb = value;
+    },
+    updateExternalInfluxSettings(settings: ExternalInfluxSettings) {
+      this.externalInfluxSettings = {
+        url: settings.url.trim(),
+        org: settings.org.trim(),
+        bucket: settings.bucket.trim(),
+        token: settings.token.trim(),
+      };
+    },
     updateUserInterface(value: boolean) {
       this.userInterface = value;
     },
@@ -1172,6 +1231,7 @@ export const useAppStore = defineStore('app', {
 
     setDockerComposeConfig(config: ConfigObject) {
       const localInfluxDbCreated = hasLocalInfluxDb(config) && !this.localInfluxDbWasPresent;
+      const legacyExternalSettings = readExternalInfluxSettings(config);
       const previousAasTag = getBasyxGoImageTag(this.dockerComposeConfig, 'aas-environment');
       const previousConfigTag = getBasyxGoImageTag(this.dockerComposeConfig, 'basyx_configuration');
       const aasTag = getBasyxGoImageTag(config, 'aas-environment');
@@ -1182,6 +1242,14 @@ export const useAppStore = defineStore('app', {
         changedConfigOnly ? 'basyx_configuration' : 'aas-environment'
       );
       this.localInfluxDbWasPresent = hasLocalInfluxDb(this.dockerComposeConfig);
+      if (legacyExternalSettings) {
+        this.externalInfluxSettings = {
+          url: legacyExternalSettings.url ?? this.externalInfluxSettings.url,
+          org: legacyExternalSettings.org ?? this.externalInfluxSettings.org,
+          bucket: legacyExternalSettings.bucket ?? this.externalInfluxSettings.bucket,
+          token: legacyExternalSettings.token ?? this.externalInfluxSettings.token,
+        };
+      }
       if (localInfluxDbCreated) {
         this.localInfluxDbOriginOptOutKey = undefined;
       }
@@ -1466,6 +1534,9 @@ export const useAppStore = defineStore('app', {
         externalBaseUrl: this.externalBaseUrl,
         mqtt: this.mqtt,
         timeSeriesData: this.timeSeriesData,
+        includeTelegraf: this.includeTelegraf,
+        includeLocalInfluxDb: this.includeLocalInfluxDb,
+        externalInfluxSettings: this.externalInfluxSettings,
         userInterface: this.userInterface,
         dashboard: this.dashboard,
         aasDiscovery: this.aasDiscovery,
@@ -1542,6 +1613,34 @@ export const useAppStore = defineStore('app', {
           data.dockerComposeConfig
         );
       }
+      const legacyExternalSettings = readExternalInfluxSettings(this.dockerComposeConfig);
+      if (isExternalInfluxSettings(data.externalInfluxSettings)) {
+        this.externalInfluxSettings = {
+          url: data.externalInfluxSettings.url ?? '',
+          org: data.externalInfluxSettings.org ?? 'basyx',
+          bucket: data.externalInfluxSettings.bucket ?? 'basyx',
+          token: data.externalInfluxSettings.token ?? '',
+        };
+      } else if (legacyExternalSettings) {
+        this.externalInfluxSettings = {
+          url: legacyExternalSettings.url ?? '',
+          org: legacyExternalSettings.org ?? 'basyx',
+          bucket: legacyExternalSettings.bucket ?? 'basyx',
+          token: legacyExternalSettings.token ?? '',
+        };
+      }
+      this.includeTelegraf =
+        typeof data.includeTelegraf === 'boolean'
+          ? data.includeTelegraf
+          : this.timeSeriesData
+            ? hasTelegraf(this.dockerComposeConfig)
+            : false;
+      this.includeLocalInfluxDb =
+        typeof data.includeLocalInfluxDb === 'boolean'
+          ? data.includeLocalInfluxDb
+          : this.timeSeriesData
+            ? hasLocalInfluxDb(this.dockerComposeConfig)
+            : true;
       if (isConfigObject(data.basyxInfraConfig)) {
         this.basyxInfraConfig = cloneSerializable(data.basyxInfraConfig);
       }

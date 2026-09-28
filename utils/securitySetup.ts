@@ -67,11 +67,19 @@ export function parseReBACAdministrators(input: string): string[] {
     .filter(Boolean);
 }
 
+function isValidReBACAdministrator(entry: string): boolean {
+  const separator = entry.indexOf('|');
+  if (separator < 0) return false;
+  const issuer = entry.slice(0, separator).trim();
+  const principal = entry.slice(separator + 1).trim();
+  const group = principal.startsWith('group:')
+    ? principal.slice('group:'.length).trim()
+    : principal;
+  return Boolean(issuer && principal && group);
+}
+
 export function validateReBACAdministrators(input: string): string | undefined {
-  const invalid = parseReBACAdministrators(input).find(entry => {
-    const [issuer, principal, ...rest] = entry.split('|').map(part => part.trim());
-    return !issuer || !principal || rest.length > 0 || principal === 'group:';
-  });
+  const invalid = parseReBACAdministrators(input).find(entry => !isValidReBACAdministrator(entry));
   return invalid
     ? `Invalid administrator "${invalid}". Use issuer|subject or issuer|group:<name>.`
     : undefined;

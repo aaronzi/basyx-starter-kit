@@ -450,5 +450,10 @@ function finalizeSettings(): void {
   navigateTo('/get-started/download');
 }
 
+watch(issuer, (newIssuer, oldIssuer) => {
+  if (rebacAdministrators.value.trim() === defaultReBACAdministrators(oldIssuer)) {
+    rebacAdministrators.value = defaultReBACAdministrators(newIssuer);
+  }
+});
 watch(compose, syncFromCompose, { immediate: true });
 </script>

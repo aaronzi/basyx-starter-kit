@@ -117,8 +117,9 @@ describe('generated local stacks', () => {
     );
     expect(parseReBACAdministrators(' a|b ,\n c|group:d ,')).toEqual(['a|b', 'c|group:d']);
     expect(validateReBACAdministrators('https://idp|alice, https://idp|group:ops')).toBeUndefined();
+    expect(validateReBACAdministrators('https://tenant.auth0.com/|auth0|123')).toBeUndefined();
     expect(validateReBACAdministrators('')).toBeUndefined();
-    for (const invalid of ['alice', 'https://idp|', '|alice', 'https://idp|group:', 'a|b|c']) {
+    for (const invalid of ['alice', 'https://idp|', '|alice', 'https://idp|group:', 'a|group: ']) {
       expect(validateReBACAdministrators(invalid), invalid).toMatch(/Invalid administrator/);
     }
   });

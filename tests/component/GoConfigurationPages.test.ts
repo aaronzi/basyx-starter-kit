@@ -461,6 +461,37 @@ describe('BaSyx Go configuration pages', () => {
     expect(environment().REBAC_ADMINISTRATORS).toBeUndefined();
   });
 
+  it('moves the generated ReBAC administrator to the selected issuer', async () => {
+    const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
+    await wrapper.find('input[data-label="Enable access control"]').setValue(true);
+    await wrapper.find('input[data-label="Include local Keycloak container"]').setValue(false);
+    await wrapper
+      .find('input[data-label="OIDC issuer URL"]')
+      .setValue('https://id.example.test/realms/basyx');
+    await wrapper.find('input[data-label="Enable resource sharing (ReBAC)"]').setValue(true);
+    await nextTick();
+    await wrapper.find('input[data-label="Include local Keycloak container"]').setValue(true);
+    await nextTick();
+    await applyButton(wrapper, 'Finalize')?.trigger('click');
+    expect(environment().REBAC_ADMINISTRATORS).toBe(
+      'http://keycloak.localhost:8080/realms/basyx|group:basyx-admins'
+    );
+
+    await wrapper
+      .find('input[data-label="ReBAC administrators"]')
+      .setValue('http://keycloak.localhost:8080/realms/basyx|group:operators');
+    await wrapper.find('input[data-label="Include local Keycloak container"]').setValue(false);
+    await wrapper
+      .find('input[data-label="OIDC issuer URL"]')
+      .setValue('https://id.example.test/realms/basyx');
+    await nextTick();
+    await applyButton(wrapper, 'Apply Access Control Settings')?.trigger('click');
+    await nextTick();
+    expect(environment().REBAC_ADMINISTRATORS).toBe(
+      'http://keycloak.localhost:8080/realms/basyx|group:operators'
+    );
+  });
+
   it('removes ReBAC when access control is disabled', async () => {
     const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
     await wrapper.find('input[data-label="Enable access control"]').setValue(true);

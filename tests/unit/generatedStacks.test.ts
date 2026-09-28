@@ -12,9 +12,13 @@ import { updateOptionalServices } from '@/utils/optionalServices';
 import {
   createLocalRealm,
   DEFAULT_POLICY,
+  defaultReBACAdministrators,
   defaultTrustList,
+  LOCAL_REBAC_ADMIN_GROUP,
   localKeycloakService,
+  parseReBACAdministrators,
   validatePolicy,
+  validateReBACAdministrators,
   validateTrustList,
 } from '@/utils/securitySetup';
 import { addOptionalSetupAssets } from '@/utils/setupAssets';
@@ -78,6 +82,14 @@ describe('generated local stacks', () => {
     );
     expect(realm.clients[0].clientId).toBe('custom-ui');
     expect(realm.users[0].credentials[0].temporary).toBe(true);
+    expect(realm.groups).toEqual([{ name: LOCAL_REBAC_ADMIN_GROUP }]);
+    expect(realm.users[0].groups).toEqual([`/${LOCAL_REBAC_ADMIN_GROUP}`]);
+    expect(realm.clients[0].protocolMappers).toContainEqual(
+      expect.objectContaining({
+        protocolMapper: 'oidc-group-membership-mapper',
+        config: expect.objectContaining({ 'claim.name': 'groups', 'full.path': 'false' }),
+      })
+    );
     const service = localKeycloakService({
       host: 'external-db',
       port: '5544',
@@ -91,6 +103,24 @@ describe('generated local stacks', () => {
       KC_DB_URL: 'jdbc:postgresql://external-db:5544/basyx',
     });
     expect(service?.networks).toEqual({ default: { aliases: ['keycloak.localhost'] } });
+  });
+
+  it('allows the service description publicly and validates ReBAC administrators', () => {
+    const rules = JSON.parse(DEFAULT_POLICY).AllAccessPermissionRules;
+    expect(rules.DEFOBJECTS).toContainEqual({
+      name: 'description',
+      objects: [{ ROUTE: '/description' }],
+    });
+    expect(rules.rules[0]).toMatchObject({ USEACL: 'public_read', USEOBJECTS: ['description'] });
+    expect(defaultReBACAdministrators()).toBe(
+      'http://keycloak.localhost:8080/realms/basyx|group:basyx-admins'
+    );
+    expect(parseReBACAdministrators(' a|b ,\n c|group:d ,')).toEqual(['a|b', 'c|group:d']);
+    expect(validateReBACAdministrators('https://idp|alice, https://idp|group:ops')).toBeUndefined();
+    expect(validateReBACAdministrators('')).toBeUndefined();
+    for (const invalid of ['alice', 'https://idp|', '|alice', 'https://idp|group:', 'a|b|c']) {
+      expect(validateReBACAdministrators(invalid), invalid).toMatch(/Invalid administrator/);
+    }
   });
 
   it('packages optional files and omits policy content from share snapshots', async () => {

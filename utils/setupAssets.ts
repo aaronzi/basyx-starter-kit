@@ -11,7 +11,7 @@ import {
   rabbitmqDefinitions,
   TEMPO_CONFIG,
 } from '@/utils/localStacks';
-import { createLocalRealm } from '@/utils/securitySetup';
+import { createLocalRealm, LOCAL_REBAC_ADMIN_GROUP } from '@/utils/securitySetup';
 
 export interface SetupAssets {
   services: Record<string, ComposeService>;
@@ -58,5 +58,9 @@ export function addOptionalSetupAssets(zip: JSZip, setup: SetupAssets): string {
     'keycloak/realm/basyx-realm.json',
     createLocalRealm(setup.adminPassword, setup.uiUrl, setup.uiClientId)
   );
-  return `\n## Local Keycloak\n\nOpen http://keycloak.localhost:8080 and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately. This local identity provider is for development only.\n`;
+  const rebacNote =
+    environment.REBAC_ENABLED === 'true'
+      ? ` \`basyx-admin\` is a member of the \`${LOCAL_REBAC_ADMIN_GROUP}\` group. Add users to this group to make them ReBAC administrators, or to other groups to share resources with them.`
+      : '';
+  return `\n## Local Keycloak\n\nOpen http://keycloak.localhost:8080 and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately.${rebacNote} This local identity provider is for development only.\n`;
 }

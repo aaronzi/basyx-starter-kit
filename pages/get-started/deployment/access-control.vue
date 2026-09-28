@@ -55,6 +55,57 @@
         The download includes a local realm and a one-time administrator password in its README.
         Keycloak is for development; use an appropriately secured identity provider in production.
       </v-alert>
+      <h2 class="text-header mb-3">Resource sharing (ReBAC)</h2>
+      <p class="text-normalText mb-3">
+        Relationship-based access control lets users share their own shells, Submodels and other
+        resources with users or groups, in addition to the access policy. Whoever creates a resource
+        becomes its owner. This feature is experimental.
+      </p>
+      <v-switch
+        v-model="rebacEnabled"
+        color="primary"
+        density="compact"
+        label="Enable resource sharing (ReBAC)"
+        @update:model-value="onReBACEnabledChanged"
+      />
+      <template v-if="rebacEnabled">
+        <v-alert type="info" variant="tonal" class="mb-4">
+          Shared resources are visible completely to their recipients, including elements the access
+          policy would hide. The access policy must allow /description for everyone; the starting
+          policy does.
+        </v-alert>
+        <v-row density="compact" class="mb-4">
+          <v-col cols="12">
+            <v-text-field
+              v-model="rebacAdministrators"
+              label="ReBAC administrators"
+              variant="solo-filled"
+              hint="Comma-separated issuer|subject or issuer|group:<name>. The local Keycloak adds basyx-admin to the basyx-admins group."
+              persistent-hint
+              :error-messages="rebacAdministratorsError"
+            />
+          </v-col>
+          <v-col cols="12" md="6">
+            <v-text-field
+              v-model="rebacSubjectClaim"
+              label="ReBAC subject claim"
+              variant="solo-filled"
+              hint="Token claim with a stable user ID, e.g. sub or oid for Entra ID."
+              persistent-hint
+            />
+          </v-col>
+          <v-col cols="12" md="6">
+            <v-text-field
+              v-model="rebacGroupClaim"
+              label="ReBAC group claim"
+              variant="solo-filled"
+              hint="Token claim with group names. Use basyx.<target> for mapped claims."
+              persistent-hint
+            />
+          </v-col>
+        </v-row>
+      </template>
+
       <v-expansion-panels class="setup-config-panels mb-6">
         <v-expansion-panel title="Expert OIDC and policy settings">
           <v-expansion-panel-text>
@@ -111,12 +162,7 @@
       </v-expansion-panels>
     </template>
 
-    <v-btn
-      class="mb-2"
-      block
-      variant="tonal"
-      :disabled="Boolean(policyError || trustListError)"
-      @click="applySettings"
+    <v-btn class="mb-2" block variant="tonal" :disabled="hasErrors" @click="applySettings"
       >Apply Access Control Settings</v-btn
     >
     <v-alert v-if="applied" type="success" variant="tonal" class="mb-6"
@@ -134,7 +180,7 @@
         variant="tonal"
         color="primary"
         append-icon="mdi-flag-checkered"
-        :disabled="Boolean(policyError || trustListError)"
+        :disabled="hasErrors"
         @click="finalizeSettings"
         >Finalize</v-btn
       >
@@ -156,9 +202,13 @@ import {
 import { envBoolean, readServiceEnvironment } from '@/utils/dockerEnvironment';
 import { getComposeServices, updateOptionalServices } from '@/utils/optionalServices';
 import {
+  defaultReBACAdministrators,
   defaultTrustList,
+  LOCAL_KEYCLOAK_ISSUER,
   localKeycloakService,
+  parseReBACAdministrators,
   validatePolicy,
+  validateReBACAdministrators,
   validateTrustList,
 } from '@/utils/securitySetup';
 
@@ -189,10 +239,14 @@ const enabled = ref(false);
 const includeKeycloak = ref(true);
 const policyJson = ref(appStore.accessPolicyJson);
 const trustListJson = ref(appStore.trustListJson);
-const issuer = ref('http://keycloak.localhost:8080/realms/basyx');
+const issuer = ref(LOCAL_KEYCLOAK_ISSUER);
 const clientId = ref('basyx-ui');
 const importMode = ref('if_missing');
 const managementApi = ref(false);
+const rebacEnabled = ref(false);
+const rebacAdministrators = ref('');
+const rebacSubjectClaim = ref('sub');
+const rebacGroupClaim = ref('groups');
 const appliedSignature = ref('');
 const settingsSignature = computed(() =>
   JSON.stringify({
@@ -204,6 +258,10 @@ const settingsSignature = computed(() =>
     clientId: clientId.value,
     importMode: importMode.value,
     managementApi: managementApi.value,
+    rebacEnabled: rebacEnabled.value,
+    rebacAdministrators: rebacAdministrators.value,
+    rebacSubjectClaim: rebacSubjectClaim.value,
+    rebacGroupClaim: rebacGroupClaim.value,
   })
 );
 const applied = computed(
@@ -213,6 +271,13 @@ const policyError = computed(() => (enabled.value ? validatePolicy(policyJson.va
 const trustListError = computed(() =>
   enabled.value ? validateTrustList(trustListJson.value) : undefined
 );
+const rebacActive = computed(() => enabled.value && rebacEnabled.value);
+const rebacAdministratorsError = computed(() =>
+  rebacActive.value ? validateReBACAdministrators(rebacAdministrators.value) : undefined
+);
+const hasErrors = computed(() =>
+  Boolean(policyError.value || trustListError.value || rebacAdministratorsError.value)
+);
 
 function onEnabledChanged(value: boolean | null): void {
   if (value) includeKeycloak.value = true;
@@ -220,9 +285,24 @@ function onEnabledChanged(value: boolean | null): void {
 
 function onKeycloakSelected(value: boolean | null): void {
   if (value) {
-    issuer.value = 'http://keycloak.localhost:8080/realms/basyx';
+    issuer.value = LOCAL_KEYCLOAK_ISSUER;
     trustListJson.value = defaultTrustList(issuer.value);
   }
+}
+
+function onReBACEnabledChanged(value: boolean | null): void {
+  if (value && !rebacAdministrators.value.trim()) {
+    rebacAdministrators.value = defaultReBACAdministrators(issuer.value);
+  }
+}
+
+function reBACEnvironment(): Record<string, string> {
+  return {
+    REBAC_ENABLED: 'true',
+    REBAC_SUBJECT_CLAIM: rebacSubjectClaim.value.trim() || 'sub',
+    REBAC_GROUP_CLAIM: rebacGroupClaim.value.trim() || 'groups',
+    REBAC_ADMINISTRATORS: parseReBACAdministrators(rebacAdministrators.value).join(','),
+  };
 }
 
 function syncFromCompose(): void {
@@ -231,12 +311,16 @@ function syncFromCompose(): void {
   includeKeycloak.value = Boolean(getComposeServices()?.keycloak);
   importMode.value = env.ABAC_POLICY_FILE_IMPORT || 'if_missing';
   managementApi.value = envBoolean(env.ABAC_MANAGEMENT_API_ENABLED);
+  rebacEnabled.value = envBoolean(env.REBAC_ENABLED);
+  rebacAdministrators.value = parseReBACAdministrators(env.REBAC_ADMINISTRATORS || '').join(', ');
+  rebacSubjectClaim.value = env.REBAC_SUBJECT_CLAIM || 'sub';
+  rebacGroupClaim.value = env.REBAC_GROUP_CLAIM || 'groups';
   const config = appStore.getBasyxInfraConfig?.value as
     { infrastructures?: Record<string, unknown> } | undefined;
   const infrastructures = config?.infrastructures;
   const infra = infrastructures?.[String(infrastructures.default)] as
     { security?: { config?: { issuer?: string; clientId?: string } } } | undefined;
-  issuer.value = infra?.security?.config?.issuer || 'http://keycloak.localhost:8080/realms/basyx';
+  issuer.value = infra?.security?.config?.issuer || LOCAL_KEYCLOAK_ISSUER;
   clientId.value = infra?.security?.config?.clientId || 'basyx-ui';
   if (appStore.trustListJson === defaultTrustList()) {
     trustListJson.value = defaultTrustList(issuer.value);
@@ -261,8 +345,14 @@ async function loadPolicyFile(value: File | File[] | null): Promise<void> {
 }
 
 function applySettings(): void {
-  if (policyError.value || trustListError.value) return;
+  if (hasErrors.value) return;
   const securityEnabled = enabled.value;
+  const rebacKeys = [
+    'REBAC_ENABLED',
+    'REBAC_SUBJECT_CLAIM',
+    'REBAC_GROUP_CLAIM',
+    'REBAC_ADMINISTRATORS',
+  ];
   const local = securityEnabled && includeKeycloak.value;
   appStore.accessPolicyJson = policyJson.value;
   appStore.trustListJson = trustListJson.value;
@@ -278,15 +368,19 @@ function applySettings(): void {
             ABAC_MANAGEMENT_API_ENABLED: String(managementApi.value),
           }
         : {}),
+      ...(rebacActive.value ? reBACEnvironment() : {}),
     },
-    securityEnabled
-      ? []
-      : [
-          'ABAC_MODELPATH',
-          'OIDC_TRUSTLISTPATH',
-          'ABAC_POLICY_FILE_IMPORT',
-          'ABAC_MANAGEMENT_API_ENABLED',
-        ]
+    [
+      ...(securityEnabled
+        ? []
+        : [
+            'ABAC_MODELPATH',
+            'OIDC_TRUSTLISTPATH',
+            'ABAC_POLICY_FILE_IMPORT',
+            'ABAC_MANAGEMENT_API_ENABLED',
+          ]),
+      ...(rebacActive.value ? [] : rebacKeys),
+    ]
   );
 
   const databaseEnv = readServiceEnvironment(appStore.getDockerComposeConfig?.value);
@@ -351,7 +445,7 @@ function applySettings(): void {
 }
 
 function finalizeSettings(): void {
-  if (policyError.value || trustListError.value) return;
+  if (hasErrors.value) return;
   applySettings();
   navigateTo('/get-started/download');
 }

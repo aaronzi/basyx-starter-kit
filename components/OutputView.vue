@@ -463,6 +463,11 @@ function buildAasEnvironmentSummary(nodeId: string): SummaryPayload {
         value: boolChip(env.ABAC_ENABLED).value,
         color: boolChip(env.ABAC_ENABLED).color,
       },
+      {
+        key: 'ReBAC',
+        value: boolChip(env.REBAC_ENABLED).value,
+        color: boolChip(env.REBAC_ENABLED).color,
+      },
       { key: 'CORS Origins', value: env.CORS_ALLOWEDORIGINS || '*' },
       { key: 'CORS Methods', value: env.CORS_ALLOWEDMETHODS || 'n/a' },
     ],

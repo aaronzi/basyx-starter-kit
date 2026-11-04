@@ -226,7 +226,7 @@ describe('compact additional-service sharing', () => {
         composeServices(),
         'arm64'
       ).join(' ')
-    ).toContain('Unavailable on ARM64');
+    ).not.toContain('Unavailable on ARM64');
   });
   it('preserves explicit null values and handles missing fields in compact snapshots', () => {
     const store = setupSuite();

@@ -5,6 +5,7 @@ import {
   defaultThirdPartyValues,
   parseThirdPartyServiceCatalog,
   resolveThirdPartyServiceReferences,
+  thirdPartyArchitectureError,
   thirdPartyFieldError,
   thirdPartyManagedServiceIds,
 } from '@/utils/thirdPartyServices';
@@ -48,11 +49,6 @@ describe('third-party service catalogue', () => {
     expect(services.find(service => service.id === 'david-sme-adapter')?.compose).toHaveProperty(
       'david-sme-adapter'
     );
-    expect(
-      services.find(service => service.id === 'david-sme-adapter')?.unsupportedArchitectures
-    ).toEqual({
-      arm64: 'The davidadap/sme-adapter image has no ARM64 version.',
-    });
 
     const resolution = resolveThirdPartyServiceReferences(
       services,
@@ -83,6 +79,19 @@ describe('third-party service catalogue', () => {
       ]
     ).toMatchObject({ environment: { POSTGRES_PASSWORD: 'suite-password' } });
   });
+
+  it.each(['amd64', 'arm64'] as const)(
+    'makes the DAVID SME adapter available on %s',
+    architecture => {
+      const services = parseThirdPartyServiceCatalog(
+        readFileSync('public/third-party-services.yaml', 'utf8')
+      );
+      const adapter = services.find(service => service.id === 'david-sme-adapter')!;
+
+      expect(adapter).toBeDefined();
+      expect(thirdPartyArchitectureError(adapter, architecture)).toBeUndefined();
+    }
+  );
 
   it('rejects short AAS Suite signing secrets before they can produce invalid application tokens', () => {
     const services = parseThirdPartyServiceCatalog(

@@ -425,7 +425,7 @@ describe('BaSyx Go configuration pages', () => {
     );
   });
 
-  it('applies access control before finalizing and keeps trust-list customizations', async () => {
+  it('applies access control before finalizing and keeps trust-list customizations except the legacy audience', async () => {
     const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
     await wrapper.find('input[data-label="Enable access control"]').setValue(true);
     await nextTick();
@@ -448,7 +448,11 @@ describe('BaSyx Go configuration pages', () => {
     const store = useAppStore();
     expect(environment().ABAC_ENABLED).toBe('true');
     expect(JSON.parse(store.trustListJson)).toEqual([
-      { ...trustList[0], issuer: 'https://id.example.test/realms/basyx' },
+      {
+        ...trustList[0],
+        issuer: 'https://id.example.test/realms/basyx',
+        audience: 'basyx-aas-environment',
+      },
     ]);
     expect(navigateTo).toHaveBeenCalledWith('/get-started/download');
   });
@@ -573,7 +577,7 @@ describe('BaSyx Go configuration pages', () => {
     expect(JSON.parse(store.trustListJson)[0]).toMatchObject({
       issuer: 'https://keycloak.localhost:8443/realms/basyx',
       discoveryUrl: 'http://keycloak.localhost:8080/realms/basyx/.well-known/openid-configuration',
-      audience: 'discovery-service',
+      audience: 'basyx-aas-environment',
     });
     expect(infraIssuer()).toBe('https://keycloak.localhost:8443/realms/basyx');
     expect(environment().REBAC_ADMINISTRATORS).toBe(
@@ -613,7 +617,7 @@ describe('BaSyx Go configuration pages', () => {
     expect(JSON.parse(useAppStore().trustListJson)).toEqual([
       {
         issuer: 'https://id.example.test/realms/basyx',
-        audience: 'discovery-service',
+        audience: 'basyx-aas-environment',
         scopes: ['email', 'profile'],
       },
     ]);

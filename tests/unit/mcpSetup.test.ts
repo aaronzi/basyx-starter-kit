@@ -89,6 +89,36 @@ describe('MCP sign-in with the local Keycloak', () => {
     expect(withLocalKeycloakTls({ db: {} }, true)).toEqual({ db: {} });
   });
 
+  it('uses Keycloak 26.8.1 and the basyx-aas-environment audience for every local setup', () => {
+    const keycloak = localKeycloakService(database).keycloak!;
+    expect(keycloak.image).toBe('keycloak/keycloak:26.8.1');
+    expect(
+      withLocalKeycloakTls({ keycloak: { ...keycloak, image: 'keycloak/keycloak:26.0.6' } }, false)
+        .keycloak?.image
+    ).toBe('keycloak/keycloak:26.8.1');
+
+    const realm = JSON.parse(createLocalRealm('password', 'http://localhost:3000'));
+    expect(realm.clients[0].protocolMappers).toContainEqual(
+      expect.objectContaining({
+        protocolMapper: 'oidc-audience-mapper',
+        config: {
+          'included.custom.audience': 'basyx-aas-environment',
+          'access.token.claim': 'true',
+        },
+      })
+    );
+    expect(JSON.parse(defaultTrustList())[0].audience).toBe('basyx-aas-environment');
+
+    const legacy = JSON.stringify([
+      { issuer: LOCAL_KEYCLOAK_ISSUER, audience: 'discovery-service', scopes: ['email'] },
+      { issuer: 'https://id.example.test', audience: 'discovery-service' },
+    ]);
+    expect(JSON.parse(withLocalKeycloakTrustList(legacy, false))).toEqual([
+      { issuer: LOCAL_KEYCLOAK_ISSUER, audience: 'basyx-aas-environment', scopes: ['email'] },
+      { issuer: 'https://id.example.test', audience: 'discovery-service' },
+    ]);
+  });
+
   it('trusts the HTTPS issuer with the internal discovery URL and the BaSyx audience', () => {
     const trustList = defaultTrustList(LOCAL_KEYCLOAK_TLS_ISSUER);
     expect(validateTrustList(trustList)).toBeUndefined();
@@ -96,7 +126,7 @@ describe('MCP sign-in with the local Keycloak', () => {
       {
         issuer: LOCAL_KEYCLOAK_TLS_ISSUER,
         discoveryUrl: LOCAL_KEYCLOAK_DISCOVERY_URL,
-        audience: 'discovery-service',
+        audience: 'basyx-aas-environment',
         scopes: ['email', 'profile'],
       },
     ]);
@@ -139,7 +169,9 @@ describe('MCP sign-in with the local Keycloak', () => {
       'oidc-group-membership-mapper',
       'oidc-audience-mapper',
     ]);
-    expect(basyx.protocolMappers[2]!.config['included.custom.audience']).toBe('discovery-service');
+    expect(basyx.protocolMappers[2]!.config['included.custom.audience']).toBe(
+      'basyx-aas-environment'
+    );
     expect(realm.clients[0].protocolMappers).toBeUndefined();
     expect(realm.users[0].realmRoles).toEqual(['offline_access']);
 
@@ -204,6 +236,8 @@ describe('MCP sign-in with the local Keycloak', () => {
     });
     expect(plainReadme).toContain('Open http://keycloak.localhost:8080');
     expect(plainReadme).not.toContain('Trust the Keycloak Certificate');
+    expect(plainReadme).toContain('only while the `basyx` realm does not exist');
+    expect(plainReadme).toContain('old audience `discovery-service`');
   });
 
   it('describes the endpoint, client commands and sign-in for each access-control mode', () => {

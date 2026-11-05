@@ -13,6 +13,8 @@ import {
 } from '@/utils/localStacks';
 import {
   createLocalRealm,
+  LEGACY_LOCAL_KEYCLOAK_AUDIENCE,
+  LOCAL_KEYCLOAK_AUDIENCE,
   LOCAL_KEYCLOAK_CERTIFICATE,
   LOCAL_REBAC_ADMIN_GROUP,
   localKeycloakIssuer,
@@ -69,7 +71,19 @@ export function addOptionalSetupAssets(zip: JSZip, setup: SetupAssets): string {
       ? ` \`basyx-admin\` is a member of the \`${LOCAL_REBAC_ADMIN_GROUP}\` group. Add users to this group to make them ReBAC administrators, or to other groups to share resources with them.`
       : '';
   const keycloakUrl = new URL(localKeycloakIssuer(tls)).origin;
-  return `\n## Local Keycloak\n\nOpen ${keycloakUrl} and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately.${rebacNote} This local identity provider is for development only.\n${tls ? keycloakCertificateReadme() : ''}`;
+  return `\n## Local Keycloak\n\nOpen ${keycloakUrl} and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately.${rebacNote} This local identity provider is for development only.\n${keycloakRealmUpgradeReadme()}${tls ? keycloakCertificateReadme() : ''}`;
+}
+
+function keycloakRealmUpgradeReadme(): string {
+  return `
+Keycloak imports \`keycloak/realm/basyx-realm.json\` only while the \`basyx\` realm does not exist. If
+you start this setup with the Keycloak database of an earlier setup, Keycloak keeps the old realm.
+Its tokens may then carry the old audience \`${LEGACY_LOCAL_KEYCLOAK_AUDIENCE}\` instead of
+\`${LOCAL_KEYCLOAK_AUDIENCE}\`, which \`security_env/trustlist.json\` requires, and lack the MCP
+sign-in settings. Either recreate the Keycloak database, for the local PostgreSQL with
+\`docker compose down -v\` (this deletes all BaSyx data as well), or add an audience mapper for
+\`${LOCAL_KEYCLOAK_AUDIENCE}\` to the realm's clients.
+`;
 }
 
 function keycloakCertificateReadme(): string {

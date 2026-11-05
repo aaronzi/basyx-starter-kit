@@ -5,14 +5,15 @@ import { readEnvironment } from '@/utils/dockerEnvironment';
 export const LOCAL_KEYCLOAK_ISSUER = 'http://keycloak.localhost:8080/realms/basyx';
 export const LOCAL_KEYCLOAK_TLS_ISSUER = 'https://keycloak.localhost:8443/realms/basyx';
 export const LOCAL_KEYCLOAK_DISCOVERY_URL = `${LOCAL_KEYCLOAK_ISSUER}/.well-known/openid-configuration`;
-export const LOCAL_KEYCLOAK_AUDIENCE = 'discovery-service';
+export const LOCAL_KEYCLOAK_AUDIENCE = 'basyx-aas-environment';
+export const LEGACY_LOCAL_KEYCLOAK_AUDIENCE = 'discovery-service';
 export const LOCAL_KEYCLOAK_CERTIFICATE = 'keycloak/tls/keycloak.crt';
 export const LOCAL_REBAC_ADMIN_GROUP = 'basyx-admins';
 
-const KEYCLOAK_IMAGE = 'keycloak/keycloak:26.0.6';
-// Older releases replace the realm default client scopes of dynamically registered clients with the
-// requested scopes, so MCP clients would receive tokens without the BaSyx audience.
-const KEYCLOAK_MCP_IMAGE = 'keycloak/keycloak:26.8.1';
+// Keycloak 26.0 replaces the realm default client scopes of dynamically registered clients with
+// the requested scopes, so MCP clients would receive tokens without the BaSyx audience.
+const KEYCLOAK_IMAGE = 'keycloak/keycloak:26.8.1';
+const LEGACY_KEYCLOAK_IMAGE = 'keycloak/keycloak:26.0.6';
 const KEYCLOAK_TLS_MOUNT = './keycloak/tls:/opt/keycloak/conf/tls:ro';
 const KEYCLOAK_CERTIFICATE_SERVICE = 'keycloak-certificate';
 const KEYCLOAK_TLS_ENVIRONMENT = {
@@ -91,6 +92,10 @@ interface TrustListEntry {
   [key: string]: unknown;
 }
 
+export function isLocalKeycloakAudience(audience: unknown): boolean {
+  return audience === LOCAL_KEYCLOAK_AUDIENCE || audience === LEGACY_LOCAL_KEYCLOAK_AUDIENCE;
+}
+
 function isLocalKeycloakIssuer(issuer: unknown): boolean {
   return issuer === LOCAL_KEYCLOAK_ISSUER || issuer === LOCAL_KEYCLOAK_TLS_ISSUER;
 }
@@ -103,6 +108,7 @@ function withLocalKeycloakTrustEntry(entry: TrustListEntry, tls: boolean): Trust
   return {
     ...rest,
     issuer: localKeycloakIssuer(tls),
+    ...(isLocalKeycloakAudience(rest.audience) ? { audience: LOCAL_KEYCLOAK_AUDIENCE } : {}),
     ...(discoveryUrl === undefined ? {} : keptDiscoveryUrl),
     ...localDiscoveryUrl,
   };
@@ -221,7 +227,7 @@ function keycloakEnvironment(service: ComposeService): Record<string, string> {
 
 function keycloakCertificateService(): ComposeService {
   return {
-    image: KEYCLOAK_MCP_IMAGE,
+    image: KEYCLOAK_IMAGE,
     user: '0',
     entrypoint: ['sh', '-c'],
     command: [KEYCLOAK_CERTIFICATE_SCRIPT],
@@ -229,8 +235,8 @@ function keycloakCertificateService(): ComposeService {
   };
 }
 
-function keycloakImageWithoutMcp(image: unknown): unknown {
-  return image === KEYCLOAK_MCP_IMAGE ? KEYCLOAK_IMAGE : image;
+function currentKeycloakImage(image: unknown): unknown {
+  return image === LEGACY_KEYCLOAK_IMAGE ? KEYCLOAK_IMAGE : image;
 }
 
 function withKeycloakTlsSettings(service: ComposeService, tls: boolean): ComposeService {
@@ -249,7 +255,7 @@ function withKeycloakTlsSettings(service: ComposeService, tls: boolean): Compose
   }
   const updated: ComposeService = {
     ...service,
-    image: tls ? KEYCLOAK_MCP_IMAGE : keycloakImageWithoutMcp(service.image),
+    image: currentKeycloakImage(service.image),
     environment: {
       ...environment,
       ...(tls ? KEYCLOAK_TLS_ENVIRONMENT : { KC_HOSTNAME: 'keycloak.localhost' }),
@@ -321,10 +327,8 @@ function attributeMapper(name: string, attribute: string, claim: string): OidcMa
 }
 
 // Current Keycloak releases only add an included.client.audience for existing clients, so the
-// realm used for MCP sign-in sets the audience as a custom value.
-function basyxProtocolMappers(
-  audienceKey: 'included.client.audience' | 'included.custom.audience'
-): OidcMapper[] {
+// audience is set as a custom value.
+function basyxProtocolMappers(): OidcMapper[] {
   return [
     attributeMapper('role', 'role', 'role'),
     oidcMapper('groups', 'oidc-group-membership-mapper', {
@@ -333,7 +337,7 @@ function basyxProtocolMappers(
       ...TOKEN_CLAIMS,
     }),
     oidcMapper('audience', 'oidc-audience-mapper', {
-      [audienceKey]: LOCAL_KEYCLOAK_AUDIENCE,
+      'included.custom.audience': LOCAL_KEYCLOAK_AUDIENCE,
       'access.token.claim': 'true',
     }),
   ];
@@ -449,7 +453,7 @@ function mcpClientScopes(): ClientScope[] {
         'display.on.consent.screen': 'true',
         'consent.screen.text': 'Access BaSyx with your roles and groups',
       },
-      basyxProtocolMappers('included.custom.audience')
+      basyxProtocolMappers()
     ),
   ];
 }
@@ -538,9 +542,7 @@ export function createLocalRealm(
           directAccessGrantsEnabled: false,
           redirectUris: [`${origin}/*`],
           webOrigins: [origin],
-          ...(mcpSignIn
-            ? {}
-            : { protocolMappers: basyxProtocolMappers('included.client.audience') }),
+          ...(mcpSignIn ? {} : { protocolMappers: basyxProtocolMappers() }),
         },
       ],
       groups: [{ name: LOCAL_REBAC_ADMIN_GROUP }],

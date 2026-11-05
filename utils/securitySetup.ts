@@ -239,6 +239,18 @@ function currentKeycloakImage(image: unknown): unknown {
   return image === LEGACY_KEYCLOAK_IMAGE ? KEYCLOAK_IMAGE : image;
 }
 
+function usesKeycloakTls(service: ComposeService): boolean {
+  return (service.volumes || []).includes(KEYCLOAK_TLS_MOUNT);
+}
+
+// A custom port mapping is kept while the TLS mode stays; switching the mode publishes its default port.
+function keycloakPorts(service: ComposeService, tls: boolean): unknown[] {
+  if (usesKeycloakTls(service) === tls && Array.isArray(service.ports) && service.ports.length) {
+    return service.ports;
+  }
+  return [tls ? '127.0.0.1:8443:8443' : '127.0.0.1:8080:8080'];
+}
+
 function withKeycloakTlsSettings(service: ComposeService, tls: boolean): ComposeService {
   const environment = keycloakEnvironment(service);
   delete environment.KC_HOSTNAME_BACKCHANNEL_DYNAMIC;
@@ -260,7 +272,7 @@ function withKeycloakTlsSettings(service: ComposeService, tls: boolean): Compose
       ...environment,
       ...(tls ? KEYCLOAK_TLS_ENVIRONMENT : { KC_HOSTNAME: 'keycloak.localhost' }),
     },
-    ports: [tls ? '127.0.0.1:8443:8443' : '127.0.0.1:8080:8080'],
+    ports: keycloakPorts(service, tls),
     volumes,
     depends_on: dependencies,
   };

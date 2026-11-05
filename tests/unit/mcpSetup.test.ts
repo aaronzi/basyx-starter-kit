@@ -329,4 +329,42 @@ describe('MCP sign-in with the local Keycloak', () => {
     expect(JSON.parse(store.trustListJson)).toEqual(JSON.parse(defaultTrustList()));
     expect(issuer()).toBe(LOCAL_KEYCLOAK_ISSUER);
   });
+
+  it('keeps a custom Keycloak port after a shared link and follows the TLS mode when it switches', () => {
+    const store = useAppStore();
+    store.initializeStarterDefaults();
+    updateOptionalServices(localKeycloakService(database), ['keycloak']);
+    store.updateServiceEnvironment('aas-environment', { ABAC_ENABLED: 'true' });
+    store.setContainerPort('keycloak', 9080);
+    const keycloakPorts = (): unknown =>
+      (store.getDockerComposeConfig?.value as { services: { keycloak: { ports: unknown } } })
+        .services.keycloak.ports;
+    expect(keycloakPorts()).toEqual(['127.0.0.1:9080:8080']);
+
+    const decoded = decodeConfigHash(
+      encodeConfigHash({
+        route: '/get-started/download',
+        state: store.createSerializableSnapshot(),
+      })
+    );
+    store.reset();
+    store.initializeStarterDefaults();
+    store.applySerializableSnapshot(decoded.payload?.state);
+    expect(keycloakPorts()).toEqual(['127.0.0.1:9080:8080']);
+    expect(store.getContainerPort('keycloak')).toBe(9080);
+
+    store.updateServiceEnvironment('aas-environment', { MCP_ENABLED: 'true' });
+    store.syncLocalKeycloakForMcp();
+    expect(keycloakPorts()).toEqual(['127.0.0.1:8443:8443']);
+    expect(store.getContainerPort('keycloak')).toBe(8443);
+
+    store.setContainerPort('keycloak', 9443);
+    store.syncLocalKeycloakForMcp();
+    expect(keycloakPorts()).toEqual(['127.0.0.1:9443:8443']);
+
+    store.updateServiceEnvironment('aas-environment', { MCP_ENABLED: 'false' });
+    store.syncLocalKeycloakForMcp();
+    expect(keycloakPorts()).toEqual(['127.0.0.1:8080:8080']);
+    expect(store.getContainerPort('keycloak')).toBe(8080);
+  });
 });

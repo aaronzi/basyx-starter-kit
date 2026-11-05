@@ -2,7 +2,7 @@
 import type { ComposeService } from '@/utils/optionalServices';
 import * as yaml from 'js-yaml';
 import { defineStore } from 'pinia';
-import { replacePublishedPort } from '@/utils/composePorts';
+import { publishedPort, replacePublishedPort } from '@/utils/composePorts';
 import { envBoolean, readServiceEnvironment } from '@/utils/dockerEnvironment';
 import {
   buildAasEnvironmentExternalUrl,
@@ -1572,6 +1572,14 @@ export const useAppStore = defineStore('app', {
         services: Record<string, ComposeService>;
       };
       composeValue.services = withLocalKeycloakTls(composeValue.services, tls);
+      const keycloakPorts = composeValue.services.keycloak?.ports;
+      const keycloakPort = Array.isArray(keycloakPorts)
+        ? publishedPort(keycloakPorts[0])
+        : undefined;
+      const storedKeycloakPort = this.containerPorts.find(item => item.id === 'keycloak');
+      if (storedKeycloakPort && keycloakPort !== undefined) {
+        storedKeycloakPort.port = keycloakPort;
+      }
       const aasEnvironment = composeValue.services['aas-environment'];
       if (aasEnvironment?.environment && environment.REBAC_ADMINISTRATORS) {
         setEnvironmentValue(

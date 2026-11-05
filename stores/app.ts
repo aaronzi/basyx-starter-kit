@@ -2,8 +2,8 @@
 import type { ComposeService } from '@/utils/optionalServices';
 import * as yaml from 'js-yaml';
 import { defineStore } from 'pinia';
-import { replacePublishedPort } from '@/utils/composePorts';
-import { readServiceEnvironment } from '@/utils/dockerEnvironment';
+import { publishedPort, replacePublishedPort } from '@/utils/composePorts';
+import { envBoolean, readServiceEnvironment } from '@/utils/dockerEnvironment';
 import {
   buildAasEnvironmentExternalUrl,
   buildExternalServiceUrl,
@@ -19,7 +19,14 @@ import {
 } from '@/utils/externalUrls';
 import { localPostgresService } from '@/utils/localStacks';
 import { mergeGeneratedConfig } from '@/utils/mergeGeneratedConfig';
-import { DEFAULT_POLICY, defaultTrustList } from '@/utils/securitySetup';
+import {
+  DEFAULT_POLICY,
+  defaultTrustList,
+  withLocalKeycloakIssuer,
+  withLocalKeycloakReBACAdministrators,
+  withLocalKeycloakTls,
+  withLocalKeycloakTrustList,
+} from '@/utils/securitySetup';
 import {
   buildThirdPartyServiceCompose,
   resolveThirdPartyServiceReferences,
@@ -148,6 +155,21 @@ function getDockerComposeServices(
   return isRecord(config?.value) && isRecord(config.value.services)
     ? config.value.services
     : undefined;
+}
+
+function withLocalKeycloakInfraIssuer(config: ConfigObject, tls: boolean): ConfigObject {
+  const updated = cloneSerializable(config);
+  if (!isRecord(updated.value) || !isRecord(updated.value.infrastructures)) {
+    return config;
+  }
+  Object.values(updated.value.infrastructures).forEach(infrastructure => {
+    const security = isRecord(infrastructure) ? infrastructure.security : undefined;
+    const securityConfig = isRecord(security) ? security.config : undefined;
+    if (isRecord(securityConfig) && typeof securityConfig.issuer === 'string') {
+      securityConfig.issuer = withLocalKeycloakIssuer(securityConfig.issuer, tls);
+    }
+  });
+  return updated;
 }
 
 function hasLocalInfluxDb(config: ConfigObject | undefined): boolean {
@@ -727,6 +749,8 @@ function createDefaultDockerComposeConfig(
             'POSTGRES_CONNMAXIDLETIMEMINUTES=0',
             'JWS_PRIVATEKEYPATH=/app/rsa-key.pem',
             'ABAC_ENABLED=false',
+            'MCP_ENABLED=false',
+            'MCP_WRITESENABLED=false',
             'GENERAL_ENABLEIMPLICITCASTS=true',
             'GENERAL_ENABLEDESCRIPTORDEBUG=false',
             'GENERAL_ENABLECUSTOMMIDDLEWAREHEADERINJECTION=false',
@@ -948,6 +972,11 @@ function initialState() {
           {
             id: 'ovw-aas-environment-security',
             title: 'Security',
+            type: 'overview',
+          },
+          {
+            id: 'ovw-aas-environment-mcp',
+            title: 'MCP Endpoint',
             type: 'overview',
           },
           { id: 'cfg-aas-environment', title: 'Docker', type: 'config' },
@@ -1531,6 +1560,40 @@ export const useAppStore = defineStore('app', {
       });
       this.setDockerComposeConfig(dockerComposeConfig);
     },
+    syncLocalKeycloakForMcp() {
+      const services = getDockerComposeServices(this.dockerComposeConfig);
+      if (!this.dockerComposeConfig || !isRecord(services?.keycloak)) {
+        return;
+      }
+      const environment = readServiceEnvironment(this.dockerComposeConfig.value);
+      const tls = envBoolean(environment.MCP_ENABLED);
+      const dockerComposeConfig = cloneSerializable(this.dockerComposeConfig);
+      const composeValue = dockerComposeConfig.value as {
+        services: Record<string, ComposeService>;
+      };
+      composeValue.services = withLocalKeycloakTls(composeValue.services, tls);
+      const keycloakPorts = composeValue.services.keycloak?.ports;
+      const keycloakPort = Array.isArray(keycloakPorts)
+        ? publishedPort(keycloakPorts[0])
+        : undefined;
+      const storedKeycloakPort = this.containerPorts.find(item => item.id === 'keycloak');
+      if (storedKeycloakPort && keycloakPort !== undefined) {
+        storedKeycloakPort.port = keycloakPort;
+      }
+      const aasEnvironment = composeValue.services['aas-environment'];
+      if (aasEnvironment?.environment && environment.REBAC_ADMINISTRATORS) {
+        setEnvironmentValue(
+          aasEnvironment.environment,
+          'REBAC_ADMINISTRATORS',
+          withLocalKeycloakReBACAdministrators(environment.REBAC_ADMINISTRATORS, tls)
+        );
+      }
+      this.setDockerComposeConfig(dockerComposeConfig);
+      this.trustListJson = withLocalKeycloakTrustList(this.trustListJson, tls);
+      if (this.basyxInfraConfig) {
+        this.setBasyxInfraConfig(withLocalKeycloakInfraIssuer(this.basyxInfraConfig, tls));
+      }
+    },
     initializeStarterDefaults() {
       this.updateUserInterface(true);
       this.externalBaseUrl = normalizeExternalBaseUrl(this.externalBaseUrl);
@@ -1784,6 +1847,7 @@ export const useAppStore = defineStore('app', {
         this.applyExternalBaseUrlToGeneratedConfigs();
       }
       this.syncManagedLocalInfluxDbOrigin();
+      this.syncLocalKeycloakForMcp();
     },
 
     // legacy setters

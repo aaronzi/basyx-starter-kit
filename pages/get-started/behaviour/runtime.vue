@@ -267,6 +267,56 @@
           </v-row>
         </v-expansion-panel-text>
       </v-expansion-panel>
+
+      <v-expansion-panel>
+        <v-expansion-panel-title>
+          MCP endpoint
+          <v-chip class="ml-2" size="x-small" color="warning" variant="tonal">Experimental</v-chip>
+        </v-expansion-panel-title>
+        <v-expansion-panel-text>
+          <p class="text-normalText mb-4">
+            Serve a Model Context Protocol endpoint next to the REST API so that MCP clients such as
+            Claude Code or Codex can read and change shells, submodels and submodel elements. Tool
+            calls use the REST API with the caller's token, so access control applies as usual.
+          </p>
+          <v-row density="compact" class="runtime-field-row">
+            <v-col cols="12" md="6">
+              <v-switch
+                v-model="mcpEnabled"
+                color="primary"
+                label="Enable MCP endpoint"
+                hint="Requires BaSyx Go 1.1.3 or newer (MCP_ENABLED)."
+                persistent-hint
+              />
+            </v-col>
+            <v-col cols="12" md="6">
+              <v-switch
+                v-model="mcpWritesEnabled"
+                color="primary"
+                label="Offer MCP write tools"
+                :disabled="!mcpEnabled"
+                hint="Lets clients create, change and delete data (MCP_WRITESENABLED)."
+                persistent-hint
+              />
+            </v-col>
+          </v-row>
+          <template v-if="mcpEnabled">
+            <p class="text-normalText mt-4 mb-2">
+              Endpoint: <code>{{ mcpUrl }}</code>
+            </p>
+            <div v-for="item in mcpCommands" :key="item.client" class="mb-2">
+              <span class="text-caption text-medium-emphasis">{{ item.client }}</span>
+              <code class="d-block mcp-command">{{ item.command }}</code>
+            </div>
+            <v-alert type="info" variant="tonal" density="compact" class="mt-4">
+              With access control and the local Keycloak, Keycloak serves HTTPS on
+              keycloak.localhost:8443 with a generated certificate, because MCP clients only sign in
+              over HTTPS. The Web UI then signs in there as well. Without access control, the
+              endpoint has no authentication; do not expose it.
+            </v-alert>
+          </template>
+        </v-expansion-panel-text>
+      </v-expansion-panel>
     </v-expansion-panels>
 
     <v-btn class="mb-2" block variant="tonal" @click="applySettings">Apply Runtime Settings</v-btn>
@@ -290,6 +340,7 @@
 import { computed, ref, watch } from 'vue';
 import { useAppStore } from '@/stores/app';
 import { envBoolean, envNumber, readServiceEnvironment } from '@/utils/dockerEnvironment';
+import { mcpClientCommands, readMcpSettings } from '@/utils/mcp';
 
 defineOptions({ name: 'RuntimeConfiguration' });
 
@@ -328,6 +379,8 @@ const DEFAULTS = {
   aasxPartMiB: 128,
   aasxMaxTotalMiB: 512,
   aasxThumbnailMiB: 16,
+  mcpEnabled: false,
+  mcpWritesEnabled: false,
 };
 
 const appStore = useAppStore();
@@ -367,6 +420,10 @@ const aasxMetadataMiB = ref(DEFAULTS.aasxMetadataMiB);
 const aasxPartMiB = ref(DEFAULTS.aasxPartMiB);
 const aasxMaxTotalMiB = ref(DEFAULTS.aasxMaxTotalMiB);
 const aasxThumbnailMiB = ref(DEFAULTS.aasxThumbnailMiB);
+const mcpEnabled = ref(DEFAULTS.mcpEnabled);
+const mcpWritesEnabled = ref(DEFAULTS.mcpWritesEnabled);
+const mcpUrl = computed(() => readMcpSettings(readServiceEnvironment(compose.value), {}).url);
+const mcpCommands = computed(() => mcpClientCommands(mcpUrl.value));
 
 const timeoutFields = [
   {
@@ -457,6 +514,8 @@ function syncFromCompose(): void {
   aasxThumbnailMiB.value = Math.round(
     envNumber(env.GENERAL_AASXMAXTHUMBNAILSIZEBYTES, DEFAULTS.aasxThumbnailMiB * MIB) / MIB
   );
+  mcpEnabled.value = envBoolean(env.MCP_ENABLED, DEFAULTS.mcpEnabled);
+  mcpWritesEnabled.value = envBoolean(env.MCP_WRITESENABLED, DEFAULTS.mcpWritesEnabled);
 }
 
 function applySettings(): void {
@@ -499,9 +558,12 @@ function applySettings(): void {
       GENERAL_AASXMAXTHUMBNAILSIZEBYTES: String(
         Math.min(Math.max(1, aasxThumbnailMiB.value), Math.max(1, aasxPartMiB.value)) * MIB
       ),
+      MCP_ENABLED: String(mcpEnabled.value),
+      MCP_WRITESENABLED: String(mcpEnabled.value && mcpWritesEnabled.value),
     },
     ['CORS_ALLOWEDCREDENTIALS']
   );
+  appStore.syncLocalKeycloakForMcp();
 }
 
 function goNext(): void {
@@ -538,6 +600,8 @@ function resetToDefaults(): void {
   aasxPartMiB.value = DEFAULTS.aasxPartMiB;
   aasxMaxTotalMiB.value = DEFAULTS.aasxMaxTotalMiB;
   aasxThumbnailMiB.value = DEFAULTS.aasxThumbnailMiB;
+  mcpEnabled.value = DEFAULTS.mcpEnabled;
+  mcpWritesEnabled.value = DEFAULTS.mcpWritesEnabled;
   applySettings();
 }
 
@@ -561,6 +625,11 @@ watch(compose, syncFromCompose, { immediate: true });
 
 .runtime-limits-row {
   container-type: inline-size;
+}
+
+.mcp-command {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 @container (max-width: 700px) {

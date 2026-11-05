@@ -425,7 +425,7 @@ describe('BaSyx Go configuration pages', () => {
     );
   });
 
-  it('applies access control before finalizing and keeps trust-list customizations except the legacy audience', async () => {
+  it('applies access control before finalizing and keeps trust-list customizations for an external issuer', async () => {
     const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
     await wrapper.find('input[data-label="Enable access control"]').setValue(true);
     await nextTick();
@@ -448,13 +448,38 @@ describe('BaSyx Go configuration pages', () => {
     const store = useAppStore();
     expect(environment().ABAC_ENABLED).toBe('true');
     expect(JSON.parse(store.trustListJson)).toEqual([
+      { ...trustList[0], issuer: 'https://id.example.test/realms/basyx' },
+    ]);
+    expect(navigateTo).toHaveBeenCalledWith('/get-started/download');
+  });
+
+  it('moves the legacy audience to basyx-aas-environment when the trust list uses the local Keycloak', async () => {
+    const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
+    await wrapper.find('input[data-label="Enable access control"]').setValue(true);
+    await nextTick();
+    await wrapper.find('input[data-label="Include local Keycloak container"]').setValue(false);
+    const trustList = [
+      {
+        issuer: 'https://id.example.test/realms/basyx',
+        audience: 'discovery-service',
+        scopes: ['custom-scope'],
+      },
+    ];
+    await wrapper
+      .find('input[data-label="OIDC trust-list JSON"]')
+      .setValue(JSON.stringify(trustList));
+    await wrapper
+      .find('input[data-label="OIDC issuer URL"]')
+      .setValue('http://keycloak.localhost:8080/realms/basyx');
+    await applyButton(wrapper, 'Finalize')?.trigger('click');
+
+    expect(JSON.parse(useAppStore().trustListJson)).toEqual([
       {
         ...trustList[0],
-        issuer: 'https://id.example.test/realms/basyx',
+        issuer: 'http://keycloak.localhost:8080/realms/basyx',
         audience: 'basyx-aas-environment',
       },
     ]);
-    expect(navigateTo).toHaveBeenCalledWith('/get-started/download');
   });
 
   it('clears the applied notice after edits and blocks invalid access policies at Finalize', async () => {

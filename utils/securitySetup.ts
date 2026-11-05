@@ -96,7 +96,7 @@ export function isLocalKeycloakAudience(audience: unknown): boolean {
   return audience === LOCAL_KEYCLOAK_AUDIENCE || audience === LEGACY_LOCAL_KEYCLOAK_AUDIENCE;
 }
 
-function isLocalKeycloakIssuer(issuer: unknown): boolean {
+export function isLocalKeycloakIssuer(issuer: unknown): boolean {
   return issuer === LOCAL_KEYCLOAK_ISSUER || issuer === LOCAL_KEYCLOAK_TLS_ISSUER;
 }
 

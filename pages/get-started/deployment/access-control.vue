@@ -218,6 +218,7 @@ import {
   defaultReBACAdministrators,
   defaultTrustList,
   isLocalKeycloakAudience,
+  isLocalKeycloakIssuer,
   LOCAL_KEYCLOAK_AUDIENCE,
   LOCAL_KEYCLOAK_DISCOVERY_URL,
   LOCAL_KEYCLOAK_TLS_ISSUER,
@@ -356,7 +357,8 @@ function updateDefaultTrustList(newIssuer: string): void {
     const entry = entries[0];
     if (entries.length === 1 && entry && isLocalKeycloakAudience(entry.audience)) {
       entry.issuer = newIssuer;
-      entry.audience = LOCAL_KEYCLOAK_AUDIENCE;
+      // An external provider keeps its configured audience; only the local Keycloak issues the new one.
+      if (isLocalKeycloakIssuer(newIssuer)) entry.audience = LOCAL_KEYCLOAK_AUDIENCE;
       if (
         newIssuer !== LOCAL_KEYCLOAK_TLS_ISSUER &&
         entry.discoveryUrl === LOCAL_KEYCLOAK_DISCOVERY_URL

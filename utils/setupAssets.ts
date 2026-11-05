@@ -13,11 +13,13 @@ import {
 } from '@/utils/localStacks';
 import {
   createLocalRealm,
+  defaultLocalKeycloakEndpoint,
   LEGACY_LOCAL_KEYCLOAK_AUDIENCE,
   LOCAL_KEYCLOAK_AUDIENCE,
   LOCAL_KEYCLOAK_CERTIFICATE,
   LOCAL_REBAC_ADMIN_GROUP,
-  localKeycloakIssuer,
+  localKeycloakEndpoint,
+  localKeycloakOrigin,
 } from '@/utils/securitySetup';
 
 export interface SetupAssets {
@@ -70,8 +72,8 @@ export function addOptionalSetupAssets(zip: JSZip, setup: SetupAssets): string {
     environment.REBAC_ENABLED === 'true'
       ? ` \`basyx-admin\` is a member of the \`${LOCAL_REBAC_ADMIN_GROUP}\` group. Add users to this group to make them ReBAC administrators, or to other groups to share resources with them.`
       : '';
-  const keycloakUrl = new URL(localKeycloakIssuer(tls)).origin;
-  return `\n## Local Keycloak\n\nOpen ${keycloakUrl} and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately.${rebacNote} This local identity provider is for development only.\n${keycloakRealmUpgradeReadme()}${tls ? keycloakCertificateReadme() : ''}`;
+  const endpoint = localKeycloakEndpoint(services.keycloak) ?? defaultLocalKeycloakEndpoint(tls);
+  return `\n## Local Keycloak\n\nOpen ${localKeycloakOrigin(endpoint)} and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately.${rebacNote} This local identity provider is for development only.\n${keycloakRealmUpgradeReadme()}${endpoint.tls ? keycloakCertificateReadme(endpoint.port) : ''}`;
 }
 
 function keycloakRealmUpgradeReadme(): string {
@@ -86,11 +88,11 @@ sign-in settings. Either recreate the Keycloak database, for the local PostgreSQ
 `;
 }
 
-function keycloakCertificateReadme(): string {
+function keycloakCertificateReadme(port: number): string {
   return `
 ### Trust the Keycloak Certificate
 
-MCP clients only open sign-in pages served over HTTPS, so Keycloak serves HTTPS on port 8443 and
+MCP clients only open sign-in pages served over HTTPS, so Keycloak serves HTTPS on port ${port} and
 the Web UI signs in there as well. On the first start, the \`keycloak-certificate\` service creates a
 self-signed certificate for \`keycloak.localhost\` in \`keycloak/tls/\`. Trust it once so that browsers
 and MCP clients accept it. On macOS, trust it for TLS only:

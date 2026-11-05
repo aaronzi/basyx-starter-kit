@@ -310,9 +310,10 @@
             </div>
             <v-alert type="info" variant="tonal" density="compact" class="mt-4">
               With access control and the local Keycloak, Keycloak serves HTTPS on
-              keycloak.localhost:8443 with a generated certificate, because MCP clients only sign in
-              over HTTPS. The Web UI then signs in there as well. Without access control, the
-              endpoint has no authentication; do not expose it.
+              keycloak.localhost (port 8443 unless changed under Container Config) with a generated
+              certificate, because MCP clients only sign in over HTTPS. The Web UI then signs in
+              there as well. Without access control, the endpoint has no authentication; do not
+              expose it.
             </v-alert>
           </template>
         </v-expansion-panel-text>
@@ -563,7 +564,7 @@ function applySettings(): void {
     },
     ['CORS_ALLOWEDCREDENTIALS']
   );
-  appStore.syncLocalKeycloakForMcp();
+  appStore.syncLocalKeycloak();
 }
 
 function goNext(): void {

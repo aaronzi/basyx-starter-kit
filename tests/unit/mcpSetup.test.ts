@@ -8,6 +8,7 @@ import { updateOptionalServices } from '@/utils/optionalServices';
 import {
   createLocalRealm,
   DEFAULT_POLICY,
+  defaultLocalKeycloakEndpoint,
   defaultTrustList,
   LOCAL_KEYCLOAK_DISCOVERY_URL,
   LOCAL_KEYCLOAK_ISSUER,
@@ -19,6 +20,9 @@ import {
   withLocalKeycloakTrustList,
 } from '@/utils/securitySetup';
 import { addOptionalSetupAssets } from '@/utils/setupAssets';
+
+const HTTP = defaultLocalKeycloakEndpoint(false);
+const HTTPS = defaultLocalKeycloakEndpoint(true);
 
 const database = {
   host: 'db',
@@ -113,7 +117,7 @@ describe('MCP sign-in with the local Keycloak', () => {
       { issuer: LOCAL_KEYCLOAK_ISSUER, audience: 'discovery-service', scopes: ['email'] },
       { issuer: 'https://id.example.test', audience: 'discovery-service' },
     ]);
-    expect(JSON.parse(withLocalKeycloakTrustList(legacy, false))).toEqual([
+    expect(JSON.parse(withLocalKeycloakTrustList(legacy, HTTP))).toEqual([
       { issuer: LOCAL_KEYCLOAK_ISSUER, audience: 'basyx-aas-environment', scopes: ['email'] },
       { issuer: 'https://id.example.test', audience: 'discovery-service' },
     ]);
@@ -131,18 +135,18 @@ describe('MCP sign-in with the local Keycloak', () => {
       },
     ]);
 
-    const converted = withLocalKeycloakTrustList(defaultTrustList(), true);
+    const converted = withLocalKeycloakTrustList(defaultTrustList(), HTTPS);
     expect(JSON.parse(converted)).toEqual(JSON.parse(trustList));
-    expect(JSON.parse(withLocalKeycloakTrustList(converted, false))).toEqual(
+    expect(JSON.parse(withLocalKeycloakTrustList(converted, HTTP))).toEqual(
       JSON.parse(defaultTrustList())
     );
     const external = defaultTrustList('https://id.example.test/realms/basyx');
-    expect(withLocalKeycloakTrustList(external, true)).toBe(external);
-    expect(withLocalKeycloakTrustList('{', true)).toBe('{');
+    expect(withLocalKeycloakTrustList(external, HTTPS)).toBe(external);
+    expect(withLocalKeycloakTrustList('{', HTTPS)).toBe('{');
     expect(
       withLocalKeycloakReBACAdministrators(
         `${LOCAL_KEYCLOAK_ISSUER}|group:basyx-admins, https://id.example.test|alice`,
-        true
+        HTTPS
       )
     ).toBe(`${LOCAL_KEYCLOAK_TLS_ISSUER}|group:basyx-admins,https://id.example.test|alice`);
   });
@@ -246,13 +250,15 @@ describe('MCP sign-in with the local Keycloak', () => {
       MCP_ENABLED: 'true',
       ABAC_ENABLED: 'true',
     };
-    const local = readMcpSettings(environment, { keycloak: {} });
+    const local = readMcpSettings(environment, localKeycloakService(database, true, 9443));
     expect(local).toEqual({
       enabled: true,
       writesEnabled: false,
       url: 'http://localhost:8082/api/mcp',
       signIn: 'local-keycloak',
+      keycloakIssuer: 'https://keycloak.localhost:9443/realms/basyx',
     });
+    expect(createMcpReadme(local)).toContain('(https://keycloak.localhost:9443/realms/basyx)');
     expect(mcpClientCommands(local.url)).toEqual([
       {
         client: 'Claude Code',
@@ -292,7 +298,7 @@ describe('MCP sign-in with the local Keycloak', () => {
     };
     store.setBasyxInfraConfig(infra);
 
-    store.syncLocalKeycloakForMcp();
+    store.syncLocalKeycloak();
 
     const issuer = (): string =>
       (
@@ -324,7 +330,7 @@ describe('MCP sign-in with the local Keycloak', () => {
     });
 
     store.updateServiceEnvironment('aas-environment', { MCP_ENABLED: 'false' });
-    store.syncLocalKeycloakForMcp();
+    store.syncLocalKeycloak();
     expect(services()['keycloak-certificate']).toBeUndefined();
     expect(JSON.parse(store.trustListJson)).toEqual(JSON.parse(defaultTrustList()));
     expect(issuer()).toBe(LOCAL_KEYCLOAK_ISSUER);
@@ -354,16 +360,16 @@ describe('MCP sign-in with the local Keycloak', () => {
     expect(store.getContainerPort('keycloak')).toBe(9080);
 
     store.updateServiceEnvironment('aas-environment', { MCP_ENABLED: 'true' });
-    store.syncLocalKeycloakForMcp();
+    store.syncLocalKeycloak();
     expect(keycloakPorts()).toEqual(['127.0.0.1:8443:8443']);
     expect(store.getContainerPort('keycloak')).toBe(8443);
 
     store.setContainerPort('keycloak', 9443);
-    store.syncLocalKeycloakForMcp();
+    store.syncLocalKeycloak();
     expect(keycloakPorts()).toEqual(['127.0.0.1:9443:8443']);
 
     store.updateServiceEnvironment('aas-environment', { MCP_ENABLED: 'false' });
-    store.syncLocalKeycloakForMcp();
+    store.syncLocalKeycloak();
     expect(keycloakPorts()).toEqual(['127.0.0.1:8080:8080']);
     expect(store.getContainerPort('keycloak')).toBe(8080);
   });

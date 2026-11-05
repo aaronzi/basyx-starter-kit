@@ -213,21 +213,26 @@ import {
   trustListSchema,
 } from '@/utils/accessSchemas';
 import { envBoolean, readServiceEnvironment } from '@/utils/dockerEnvironment';
-import { getComposeServices, updateOptionalServices } from '@/utils/optionalServices';
 import {
+  type ComposeService,
+  getComposeServices,
+  updateOptionalServices,
+} from '@/utils/optionalServices';
+import {
+  defaultLocalKeycloakEndpoint,
   defaultReBACAdministrators,
   defaultTrustList,
   isLocalKeycloakAudience,
-  isLocalKeycloakIssuer,
-  LOCAL_KEYCLOAK_AUDIENCE,
   LOCAL_KEYCLOAK_DISCOVERY_URL,
-  LOCAL_KEYCLOAK_TLS_ISSUER,
+  localKeycloakEndpoint,
+  localKeycloakEndpointOfIssuer,
   localKeycloakIssuer,
   localKeycloakService,
   parseReBACAdministrators,
   validatePolicy,
   validateReBACAdministrators,
   validateTrustList,
+  withLocalKeycloakTrustList,
 } from '@/utils/securitySetup';
 
 defineOptions({ name: 'ABAC' });
@@ -249,7 +254,15 @@ const trustListEditorSchema = {
 };
 const compose = computed(() => appStore.getDockerComposeConfig?.value);
 const mcpEnabled = computed(() => envBoolean(readServiceEnvironment(compose.value).MCP_ENABLED));
-const localIssuer = computed(() => localKeycloakIssuer(mcpEnabled.value));
+const localEndpoint = computed(() => {
+  const services = (compose.value as { services?: Record<string, ComposeService> } | undefined)
+    ?.services;
+  const current = localKeycloakEndpoint(services?.keycloak);
+  return current?.tls === mcpEnabled.value
+    ? current
+    : defaultLocalKeycloakEndpoint(mcpEnabled.value);
+});
+const localIssuer = computed(() => localKeycloakIssuer(localEndpoint.value));
 const breadcrumbs = ref([
   { title: 'Home', to: '/' },
   { title: 'Get Started', to: '/get-started/introduction' },
@@ -357,14 +370,11 @@ function updateDefaultTrustList(newIssuer: string): void {
     const entry = entries[0];
     if (entries.length === 1 && entry && isLocalKeycloakAudience(entry.audience)) {
       entry.issuer = newIssuer;
-      // An external provider keeps its configured audience; only the local Keycloak issues the new one.
-      if (isLocalKeycloakIssuer(newIssuer)) entry.audience = LOCAL_KEYCLOAK_AUDIENCE;
-      if (
-        newIssuer !== LOCAL_KEYCLOAK_TLS_ISSUER &&
-        entry.discoveryUrl === LOCAL_KEYCLOAK_DISCOVERY_URL
-      )
-        delete entry.discoveryUrl;
-      trustListJson.value = JSON.stringify(entries, null, 2);
+      if (entry.discoveryUrl === LOCAL_KEYCLOAK_DISCOVERY_URL) delete entry.discoveryUrl;
+      const updated = JSON.stringify(entries, null, 2);
+      // The local Keycloak issues the current audience; an external provider keeps its own.
+      const local = localKeycloakEndpointOfIssuer(newIssuer);
+      trustListJson.value = local ? withLocalKeycloakTrustList(updated, local) : updated;
     }
   } catch {
     /* Keep user-entered JSON visible for correction. */
@@ -418,14 +428,18 @@ function applySettings(): void {
   const databaseEnv = readServiceEnvironment(appStore.getDockerComposeConfig?.value);
   updateOptionalServices(
     local
-      ? localKeycloakService({
-          host: databaseEnv.POSTGRES_HOST || 'db',
-          port: databaseEnv.POSTGRES_PORT || '5432',
-          name: databaseEnv.POSTGRES_DBNAME || 'basyxTestDB',
-          user: databaseEnv.POSTGRES_USER || 'admin',
-          password: databaseEnv.POSTGRES_PASSWORD || 'admin123',
-          local: Boolean(getComposeServices()?.db),
-        })
+      ? localKeycloakService(
+          {
+            host: databaseEnv.POSTGRES_HOST || 'db',
+            port: databaseEnv.POSTGRES_PORT || '5432',
+            name: databaseEnv.POSTGRES_DBNAME || 'basyxTestDB',
+            user: databaseEnv.POSTGRES_USER || 'admin',
+            password: databaseEnv.POSTGRES_PASSWORD || 'admin123',
+            local: Boolean(getComposeServices()?.db),
+          },
+          localEndpoint.value.tls,
+          localEndpoint.value.port
+        )
       : {},
     ['keycloak', 'keycloak-certificate']
   );
@@ -473,7 +487,7 @@ function applySettings(): void {
       : { type: 'none' };
     appStore.setBasyxInfraConfig(updated);
   }
-  appStore.syncLocalKeycloakForMcp();
+  appStore.syncLocalKeycloak();
   appliedSignature.value = settingsSignature.value;
 }
 

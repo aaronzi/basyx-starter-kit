@@ -1,9 +1,35 @@
 import type { ComposeService } from '@/utils/optionalServices';
 import { validateSchemaJson } from '@/utils/accessSchemas';
+import { publishedPort } from '@/utils/composePorts';
 import { readEnvironment } from '@/utils/dockerEnvironment';
 
-export const LOCAL_KEYCLOAK_ISSUER = 'http://keycloak.localhost:8080/realms/basyx';
-export const LOCAL_KEYCLOAK_TLS_ISSUER = 'https://keycloak.localhost:8443/realms/basyx';
+export interface LocalKeycloakEndpoint {
+  tls: boolean;
+  port: number;
+}
+
+const KEYCLOAK_HOST = 'keycloak.localhost';
+const KEYCLOAK_HTTP_PORT = 8080;
+const KEYCLOAK_HTTPS_PORT = 8443;
+const KEYCLOAK_REALM_PATH = '/realms/basyx';
+const LOCAL_KEYCLOAK_ISSUER_PATTERN = /^(https?):\/\/keycloak\.localhost:(\d+)\/realms\/basyx$/;
+
+export function defaultLocalKeycloakEndpoint(tls: boolean): LocalKeycloakEndpoint {
+  return { tls, port: tls ? KEYCLOAK_HTTPS_PORT : KEYCLOAK_HTTP_PORT };
+}
+
+export function localKeycloakOrigin(endpoint: LocalKeycloakEndpoint): string {
+  return `${endpoint.tls ? 'https' : 'http'}://${KEYCLOAK_HOST}:${endpoint.port}`;
+}
+
+export function localKeycloakIssuer(
+  endpoint: LocalKeycloakEndpoint = defaultLocalKeycloakEndpoint(false)
+): string {
+  return `${localKeycloakOrigin(endpoint)}${KEYCLOAK_REALM_PATH}`;
+}
+
+export const LOCAL_KEYCLOAK_ISSUER = localKeycloakIssuer();
+export const LOCAL_KEYCLOAK_TLS_ISSUER = localKeycloakIssuer(defaultLocalKeycloakEndpoint(true));
 export const LOCAL_KEYCLOAK_DISCOVERY_URL = `${LOCAL_KEYCLOAK_ISSUER}/.well-known/openid-configuration`;
 export const LOCAL_KEYCLOAK_AUDIENCE = 'basyx-aas-environment';
 export const LEGACY_LOCAL_KEYCLOAK_AUDIENCE = 'discovery-service';
@@ -16,11 +42,7 @@ const KEYCLOAK_IMAGE = 'keycloak/keycloak:26.8.1';
 const LEGACY_KEYCLOAK_IMAGE = 'keycloak/keycloak:26.0.6';
 const KEYCLOAK_TLS_MOUNT = './keycloak/tls:/opt/keycloak/conf/tls:ro';
 const KEYCLOAK_CERTIFICATE_SERVICE = 'keycloak-certificate';
-const KEYCLOAK_TLS_ENVIRONMENT = {
-  KC_HOSTNAME: 'https://keycloak.localhost:8443',
-  KC_HOSTNAME_BACKCHANNEL_DYNAMIC: 'true',
-  KC_HTTPS_KEY_STORE_FILE: '/opt/keycloak/conf/tls/keycloak.p12',
-};
+const KEYCLOAK_KEY_STORE_FILE = '/opt/keycloak/conf/tls/keycloak.p12';
 const KEYCLOAK_CERTIFICATE_SCRIPT = `set -e
 if [ ! -f /tls/keycloak.p12 ]; then
   keytool -genkeypair -alias keycloak -keyalg RSA -keysize 2048 -validity 825 \\
@@ -32,8 +54,16 @@ if [ ! -f /tls/keycloak.p12 ]; then
 fi
 `;
 
-export function localKeycloakIssuer(tls: boolean): string {
-  return tls ? LOCAL_KEYCLOAK_TLS_ISSUER : LOCAL_KEYCLOAK_ISSUER;
+// Inside Docker, Keycloak is reached on its HTTP container port. Any other issuer needs the
+// internal discovery URL and a fixed frontend URL with a dynamic backchannel.
+function usesInternalDiscovery(endpoint: LocalKeycloakEndpoint): boolean {
+  return endpoint.tls || endpoint.port !== KEYCLOAK_HTTP_PORT;
+}
+
+export function localKeycloakEndpointOfIssuer(issuer: unknown): LocalKeycloakEndpoint | undefined {
+  const match =
+    typeof issuer === 'string' ? issuer.trim().match(LOCAL_KEYCLOAK_ISSUER_PATTERN) : null;
+  return match ? { tls: match[1] === 'https', port: Number(match[2]) } : undefined;
 }
 
 export const DEFAULT_POLICY = JSON.stringify(
@@ -77,8 +107,11 @@ export function defaultTrustList(
   issuer = LOCAL_KEYCLOAK_ISSUER,
   audience = LOCAL_KEYCLOAK_AUDIENCE
 ): string {
+  const endpoint = localKeycloakEndpointOfIssuer(issuer);
   const discoveryUrl =
-    issuer === LOCAL_KEYCLOAK_TLS_ISSUER ? { discoveryUrl: LOCAL_KEYCLOAK_DISCOVERY_URL } : {};
+    endpoint && usesInternalDiscovery(endpoint)
+      ? { discoveryUrl: LOCAL_KEYCLOAK_DISCOVERY_URL }
+      : {};
   return JSON.stringify(
     [{ issuer, ...discoveryUrl, audience, scopes: ['email', 'profile'] }],
     null,
@@ -97,24 +130,32 @@ export function isLocalKeycloakAudience(audience: unknown): boolean {
 }
 
 export function isLocalKeycloakIssuer(issuer: unknown): boolean {
-  return issuer === LOCAL_KEYCLOAK_ISSUER || issuer === LOCAL_KEYCLOAK_TLS_ISSUER;
+  return localKeycloakEndpointOfIssuer(issuer) !== undefined;
 }
 
-function withLocalKeycloakTrustEntry(entry: TrustListEntry, tls: boolean): TrustListEntry {
+function withLocalKeycloakTrustEntry(
+  entry: TrustListEntry,
+  endpoint: LocalKeycloakEndpoint
+): TrustListEntry {
   if (!isLocalKeycloakIssuer(entry.issuer)) return entry;
   const { discoveryUrl, ...rest } = entry;
   const keptDiscoveryUrl = discoveryUrl === LOCAL_KEYCLOAK_DISCOVERY_URL ? {} : { discoveryUrl };
-  const localDiscoveryUrl = tls ? { discoveryUrl: LOCAL_KEYCLOAK_DISCOVERY_URL } : {};
+  const localDiscoveryUrl = usesInternalDiscovery(endpoint)
+    ? { discoveryUrl: LOCAL_KEYCLOAK_DISCOVERY_URL }
+    : {};
   return {
     ...rest,
-    issuer: localKeycloakIssuer(tls),
+    issuer: localKeycloakIssuer(endpoint),
     ...(isLocalKeycloakAudience(rest.audience) ? { audience: LOCAL_KEYCLOAK_AUDIENCE } : {}),
     ...(discoveryUrl === undefined ? {} : keptDiscoveryUrl),
     ...localDiscoveryUrl,
   };
 }
 
-export function withLocalKeycloakTrustList(trustListJson: string, tls: boolean): string {
+export function withLocalKeycloakTrustList(
+  trustListJson: string,
+  endpoint: LocalKeycloakEndpoint
+): string {
   let entries: unknown;
   try {
     entries = JSON.parse(trustListJson);
@@ -123,15 +164,15 @@ export function withLocalKeycloakTrustList(trustListJson: string, tls: boolean):
   }
   if (!Array.isArray(entries)) return trustListJson;
   const updated = entries.map(entry =>
-    entry && typeof entry === 'object' ? withLocalKeycloakTrustEntry(entry, tls) : entry
+    entry && typeof entry === 'object' ? withLocalKeycloakTrustEntry(entry, endpoint) : entry
   );
   return JSON.stringify(updated) === JSON.stringify(entries)
     ? trustListJson
     : JSON.stringify(updated, null, 2);
 }
 
-export function withLocalKeycloakIssuer(issuer: string, tls: boolean): string {
-  return isLocalKeycloakIssuer(issuer.trim()) ? localKeycloakIssuer(tls) : issuer;
+export function withLocalKeycloakIssuer(issuer: string, endpoint: LocalKeycloakEndpoint): string {
+  return isLocalKeycloakIssuer(issuer) ? localKeycloakIssuer(endpoint) : issuer;
 }
 
 export function validatePolicy(input: string): string | undefined {
@@ -153,12 +194,15 @@ export function parseReBACAdministrators(input: string): string[] {
     .filter(Boolean);
 }
 
-export function withLocalKeycloakReBACAdministrators(input: string, tls: boolean): string {
+export function withLocalKeycloakReBACAdministrators(
+  input: string,
+  endpoint: LocalKeycloakEndpoint
+): string {
   return parseReBACAdministrators(input)
     .map(entry => {
       const separator = entry.indexOf('|');
       if (separator < 0) return entry;
-      return `${withLocalKeycloakIssuer(entry.slice(0, separator), tls)}${entry.slice(separator)}`;
+      return `${withLocalKeycloakIssuer(entry.slice(0, separator), endpoint)}${entry.slice(separator)}`;
     })
     .join(',');
 }
@@ -190,7 +234,8 @@ export function localKeycloakService(
     password: string;
     local: boolean;
   },
-  tls = false
+  tls = false,
+  port = defaultLocalKeycloakEndpoint(tls).port
 ): Record<string, ComposeService> {
   return withLocalKeycloakTls(
     {
@@ -208,9 +253,12 @@ export function localKeycloakService(
           KC_HOSTNAME_STRICT: 'false',
           KC_HOSTNAME_STRICT_BACKCHANNEL: 'false',
         },
-        ports: ['127.0.0.1:8080:8080'],
+        ports: [keycloakPortMapping({ tls, port })],
         networks: { default: { aliases: ['keycloak.localhost'] } },
-        volumes: ['./keycloak/realm:/opt/keycloak/data/import:ro'],
+        volumes: [
+          './keycloak/realm:/opt/keycloak/data/import:ro',
+          ...(tls ? [KEYCLOAK_TLS_MOUNT] : []),
+        ],
         ...(database.local ? { depends_on: { db: { condition: 'service_healthy' } } } : {}),
         restart: 'unless-stopped',
       },
@@ -243,12 +291,34 @@ function usesKeycloakTls(service: ComposeService): boolean {
   return (service.volumes || []).includes(KEYCLOAK_TLS_MOUNT);
 }
 
+function keycloakPortMapping(endpoint: LocalKeycloakEndpoint): string {
+  return `127.0.0.1:${endpoint.port}:${endpoint.tls ? KEYCLOAK_HTTPS_PORT : KEYCLOAK_HTTP_PORT}`;
+}
+
 // A custom port mapping is kept while the TLS mode stays; switching the mode publishes its default port.
 function keycloakPorts(service: ComposeService, tls: boolean): unknown[] {
   if (usesKeycloakTls(service) === tls && Array.isArray(service.ports) && service.ports.length) {
     return service.ports;
   }
-  return [tls ? '127.0.0.1:8443:8443' : '127.0.0.1:8080:8080'];
+  return [keycloakPortMapping(defaultLocalKeycloakEndpoint(tls))];
+}
+
+export function localKeycloakEndpoint(
+  service: ComposeService | undefined
+): LocalKeycloakEndpoint | undefined {
+  if (!service) return undefined;
+  const tls = usesKeycloakTls(service);
+  const port = Array.isArray(service.ports) ? publishedPort(service.ports[0]) : undefined;
+  return { tls, port: port ?? defaultLocalKeycloakEndpoint(tls).port };
+}
+
+function keycloakHostnameEnvironment(endpoint: LocalKeycloakEndpoint): Record<string, string> {
+  if (!usesInternalDiscovery(endpoint)) return { KC_HOSTNAME: KEYCLOAK_HOST };
+  return {
+    KC_HOSTNAME: localKeycloakOrigin(endpoint),
+    KC_HOSTNAME_BACKCHANNEL_DYNAMIC: 'true',
+    ...(endpoint.tls ? { KC_HTTPS_KEY_STORE_FILE: KEYCLOAK_KEY_STORE_FILE } : {}),
+  };
 }
 
 function withKeycloakTlsSettings(service: ComposeService, tls: boolean): ComposeService {
@@ -265,14 +335,13 @@ function withKeycloakTlsSettings(service: ComposeService, tls: boolean): Compose
     dependencies[KEYCLOAK_CERTIFICATE_SERVICE] = { condition: 'service_completed_successfully' };
     volumes.push(KEYCLOAK_TLS_MOUNT);
   }
+  const ports = keycloakPorts(service, tls);
+  const port = publishedPort(ports[0]) ?? defaultLocalKeycloakEndpoint(tls).port;
   const updated: ComposeService = {
     ...service,
     image: currentKeycloakImage(service.image),
-    environment: {
-      ...environment,
-      ...(tls ? KEYCLOAK_TLS_ENVIRONMENT : { KC_HOSTNAME: 'keycloak.localhost' }),
-    },
-    ports: keycloakPorts(service, tls),
+    environment: { ...environment, ...keycloakHostnameEnvironment({ tls, port }) },
+    ports,
     volumes,
     depends_on: dependencies,
   };

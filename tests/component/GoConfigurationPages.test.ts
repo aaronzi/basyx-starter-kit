@@ -648,6 +648,37 @@ describe('BaSyx Go configuration pages', () => {
     ]);
   });
 
+  it('keeps a custom local Keycloak port when access control is applied again', async () => {
+    const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
+    await wrapper.find('input[data-label="Enable access control"]').setValue(true);
+    await applyButton(wrapper, 'Apply Access Control Settings')?.trigger('click');
+    await nextTick();
+    const store = useAppStore();
+    store.setContainerPort('keycloak', 9080);
+    await nextTick();
+    expect(
+      (wrapper.find('input[data-label="OIDC issuer URL"]').element as HTMLInputElement).value
+    ).toBe('http://keycloak.localhost:9080/realms/basyx');
+
+    await wrapper.find('input[data-label="Enable resource sharing (ReBAC)"]').setValue(true);
+    await nextTick();
+    await applyButton(wrapper, 'Apply Access Control Settings')?.trigger('click');
+    await nextTick();
+    const keycloak = (
+      store.getDockerComposeConfig?.value as {
+        services: { keycloak: { ports: string[]; environment: Record<string, string> } };
+      }
+    ).services.keycloak;
+    expect(keycloak.ports).toEqual(['127.0.0.1:9080:8080']);
+    expect(keycloak.environment.KC_HOSTNAME).toBe('http://keycloak.localhost:9080');
+    expect(JSON.parse(store.trustListJson)[0].issuer).toBe(
+      'http://keycloak.localhost:9080/realms/basyx'
+    );
+    expect(environment().REBAC_ADMINISTRATORS).toBe(
+      'http://keycloak.localhost:9080/realms/basyx|group:basyx-admins'
+    );
+  });
+
   it('removes ReBAC when access control is disabled', async () => {
     const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
     await wrapper.find('input[data-label="Enable access control"]').setValue(true);

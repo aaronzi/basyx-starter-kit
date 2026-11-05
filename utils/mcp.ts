@@ -1,6 +1,11 @@
+import type { ComposeService } from '@/utils/optionalServices';
 import { envBoolean } from '@/utils/dockerEnvironment';
 import { joinBaseUrl } from '@/utils/externalUrls';
-import { LOCAL_KEYCLOAK_CERTIFICATE, LOCAL_KEYCLOAK_TLS_ISSUER } from '@/utils/securitySetup';
+import {
+  LOCAL_KEYCLOAK_CERTIFICATE,
+  localKeycloakEndpoint,
+  localKeycloakIssuer,
+} from '@/utils/securitySetup';
 
 export const MCP_SERVER_NAME = 'basyx';
 export const DEFAULT_MCP_PATH = '/mcp';
@@ -12,6 +17,7 @@ export interface McpSettings {
   writesEnabled: boolean;
   url: string;
   signIn: McpSignIn;
+  keycloakIssuer?: string;
 }
 
 export interface McpClientCommand {
@@ -24,6 +30,7 @@ export function readMcpSettings(
   services: Record<string, unknown>
 ): McpSettings {
   const accessControl = envBoolean(environment.ABAC_ENABLED);
+  const keycloak = localKeycloakEndpoint(services.keycloak as ComposeService | undefined);
   return {
     enabled: envBoolean(environment.MCP_ENABLED),
     writesEnabled: envBoolean(environment.MCP_WRITESENABLED),
@@ -31,7 +38,8 @@ export function readMcpSettings(
       environment.GENERAL_EXTERNALURL || '',
       environment.MCP_PATH?.trim() || DEFAULT_MCP_PATH
     ),
-    signIn: !accessControl ? 'none' : services.keycloak ? 'local-keycloak' : 'external',
+    signIn: !accessControl ? 'none' : keycloak ? 'local-keycloak' : 'external',
+    ...(accessControl && keycloak ? { keycloakIssuer: localKeycloakIssuer(keycloak) } : {}),
   };
 }
 
@@ -45,15 +53,17 @@ export function mcpClientCommands(url: string): McpClientCommand[] {
   ];
 }
 
-const SIGN_IN_NOTES: Record<McpSignIn, string> = {
-  none: `The endpoint has no authentication because access control is disabled. Do not expose it,
+const SIGN_IN_NOTES: Record<McpSignIn, (settings: McpSettings) => string> = {
+  none: () => `The endpoint has no authentication because access control is disabled. Do not expose it,
 and do not enable write tools on an endpoint that others can reach.`,
-  'local-keycloak': `Clients sign in at the local Keycloak (${LOCAL_KEYCLOAK_TLS_ISSUER}). Trust its certificate
+  'local-keycloak':
+    settings => `Clients sign in at the local Keycloak (${settings.keycloakIssuer}). Trust its certificate
 first, as described under Local Keycloak. In Claude Code, run \`/mcp\`, select \`${MCP_SERVER_NAME}\` and choose
 *Authenticate*. In Codex, run \`codex mcp login ${MCP_SERVER_NAME}\`. The clients register themselves with a
 loopback redirect URI, and every tool call runs with the signed-in user's permissions. If a client
 rejects the certificate, start it with \`NODE_EXTRA_CA_CERTS=$PWD/${LOCAL_KEYCLOAK_CERTIFICATE}\`.`,
-  external: `Clients sign in at the identity provider of the trust list. It must serve HTTPS with a trusted
+  external:
+    () => `Clients sign in at the identity provider of the trust list. It must serve HTTPS with a trusted
 certificate, support the authorization code flow with PKCE, let clients register themselves
 (dynamic client registration) or provide a registered public client (\`--client-id\`), and put the
 trust-list audience into the access tokens. Every tool call runs with the signed-in user's
@@ -76,6 +86,6 @@ It requires an AAS Environment image with MCP support (BaSyx Go 1.1.3 or newer).
 
 ${commands}
 
-${SIGN_IN_NOTES[settings.signIn]}
+${SIGN_IN_NOTES[settings.signIn](settings)}
 `;
 }

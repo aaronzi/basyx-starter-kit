@@ -2,7 +2,7 @@
 import type { ComposeService } from '@/utils/optionalServices';
 import * as yaml from 'js-yaml';
 import { defineStore } from 'pinia';
-import { publishedPort, replacePublishedPort } from '@/utils/composePorts';
+import { replacePublishedPort } from '@/utils/composePorts';
 import { envBoolean, readServiceEnvironment } from '@/utils/dockerEnvironment';
 import {
   buildAasEnvironmentExternalUrl,
@@ -22,6 +22,8 @@ import { mergeGeneratedConfig } from '@/utils/mergeGeneratedConfig';
 import {
   DEFAULT_POLICY,
   defaultTrustList,
+  type LocalKeycloakEndpoint,
+  localKeycloakEndpoint,
   withLocalKeycloakIssuer,
   withLocalKeycloakReBACAdministrators,
   withLocalKeycloakTls,
@@ -157,7 +159,10 @@ function getDockerComposeServices(
     : undefined;
 }
 
-function withLocalKeycloakInfraIssuer(config: ConfigObject, tls: boolean): ConfigObject {
+function withLocalKeycloakInfraIssuer(
+  config: ConfigObject,
+  endpoint: LocalKeycloakEndpoint
+): ConfigObject {
   const updated = cloneSerializable(config);
   if (!isRecord(updated.value) || !isRecord(updated.value.infrastructures)) {
     return config;
@@ -166,7 +171,7 @@ function withLocalKeycloakInfraIssuer(config: ConfigObject, tls: boolean): Confi
     const security = isRecord(infrastructure) ? infrastructure.security : undefined;
     const securityConfig = isRecord(security) ? security.config : undefined;
     if (isRecord(securityConfig) && typeof securityConfig.issuer === 'string') {
-      securityConfig.issuer = withLocalKeycloakIssuer(securityConfig.issuer, tls);
+      securityConfig.issuer = withLocalKeycloakIssuer(securityConfig.issuer, endpoint);
     }
   });
   return updated;
@@ -1560,7 +1565,7 @@ export const useAppStore = defineStore('app', {
       });
       this.setDockerComposeConfig(dockerComposeConfig);
     },
-    syncLocalKeycloakForMcp() {
+    syncLocalKeycloak() {
       const services = getDockerComposeServices(this.dockerComposeConfig);
       if (!this.dockerComposeConfig || !isRecord(services?.keycloak)) {
         return;
@@ -1572,26 +1577,26 @@ export const useAppStore = defineStore('app', {
         services: Record<string, ComposeService>;
       };
       composeValue.services = withLocalKeycloakTls(composeValue.services, tls);
-      const keycloakPorts = composeValue.services.keycloak?.ports;
-      const keycloakPort = Array.isArray(keycloakPorts)
-        ? publishedPort(keycloakPorts[0])
-        : undefined;
+      const endpoint = localKeycloakEndpoint(composeValue.services.keycloak);
+      if (!endpoint) {
+        return;
+      }
       const storedKeycloakPort = this.containerPorts.find(item => item.id === 'keycloak');
-      if (storedKeycloakPort && keycloakPort !== undefined) {
-        storedKeycloakPort.port = keycloakPort;
+      if (storedKeycloakPort) {
+        storedKeycloakPort.port = endpoint.port;
       }
       const aasEnvironment = composeValue.services['aas-environment'];
       if (aasEnvironment?.environment && environment.REBAC_ADMINISTRATORS) {
         setEnvironmentValue(
           aasEnvironment.environment,
           'REBAC_ADMINISTRATORS',
-          withLocalKeycloakReBACAdministrators(environment.REBAC_ADMINISTRATORS, tls)
+          withLocalKeycloakReBACAdministrators(environment.REBAC_ADMINISTRATORS, endpoint)
         );
       }
       this.setDockerComposeConfig(dockerComposeConfig);
-      this.trustListJson = withLocalKeycloakTrustList(this.trustListJson, tls);
+      this.trustListJson = withLocalKeycloakTrustList(this.trustListJson, endpoint);
       if (this.basyxInfraConfig) {
-        this.setBasyxInfraConfig(withLocalKeycloakInfraIssuer(this.basyxInfraConfig, tls));
+        this.setBasyxInfraConfig(withLocalKeycloakInfraIssuer(this.basyxInfraConfig, endpoint));
       }
     },
     initializeStarterDefaults() {
@@ -1847,7 +1852,7 @@ export const useAppStore = defineStore('app', {
         this.applyExternalBaseUrlToGeneratedConfigs();
       }
       this.syncManagedLocalInfluxDbOrigin();
-      this.syncLocalKeycloakForMcp();
+      this.syncLocalKeycloak();
     },
 
     // legacy setters
@@ -1889,6 +1894,9 @@ export const useAppStore = defineStore('app', {
       if (serviceName === 'aas-environment') {
         this.externalBaseUrl = replaceExplicitUrlPort(this.externalBaseUrl, port);
         this.applyExternalBaseUrlToGeneratedConfigs();
+      }
+      if (serviceName === 'keycloak') {
+        this.syncLocalKeycloak();
       }
     },
     setContainerName(serviceName: string, name: string | undefined) {

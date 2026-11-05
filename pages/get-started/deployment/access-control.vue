@@ -55,6 +55,19 @@
         The download includes a local realm and a one-time administrator password in its README.
         Keycloak is for development; use an appropriately secured identity provider in production.
       </v-alert>
+      <v-alert v-if="mcpEnabled" type="info" variant="tonal" class="mb-4">
+        <template v-if="includeKeycloak">
+          The experimental MCP endpoint is enabled, so the local Keycloak serves HTTPS at
+          {{ localIssuer }} with a certificate generated on first start. The Web UI and MCP clients
+          such as Claude Code and Codex sign in there; trust the certificate once as described in
+          the README.
+        </template>
+        <template v-else>
+          The experimental MCP endpoint is enabled. For MCP clients to sign in, the identity
+          provider must serve HTTPS, support PKCE and dynamic client registration (or a registered
+          public client), and put the trust-list audience into its access tokens.
+        </template>
+      </v-alert>
       <h2 class="text-header mb-3">Resource sharing (ReBAC)</h2>
       <p class="text-normalText mb-3">
         Relationship-based access control lets users share their own shells, Submodels and other
@@ -204,7 +217,10 @@ import { getComposeServices, updateOptionalServices } from '@/utils/optionalServ
 import {
   defaultReBACAdministrators,
   defaultTrustList,
-  LOCAL_KEYCLOAK_ISSUER,
+  LOCAL_KEYCLOAK_AUDIENCE,
+  LOCAL_KEYCLOAK_DISCOVERY_URL,
+  LOCAL_KEYCLOAK_TLS_ISSUER,
+  localKeycloakIssuer,
   localKeycloakService,
   parseReBACAdministrators,
   validatePolicy,
@@ -230,6 +246,8 @@ const trustListEditorSchema = {
   schema: trustListSchema,
 };
 const compose = computed(() => appStore.getDockerComposeConfig?.value);
+const mcpEnabled = computed(() => envBoolean(readServiceEnvironment(compose.value).MCP_ENABLED));
+const localIssuer = computed(() => localKeycloakIssuer(mcpEnabled.value));
 const breadcrumbs = ref([
   { title: 'Home', to: '/' },
   { title: 'Get Started', to: '/get-started/introduction' },
@@ -239,7 +257,7 @@ const enabled = ref(false);
 const includeKeycloak = ref(true);
 const policyJson = ref(appStore.accessPolicyJson);
 const trustListJson = ref(appStore.trustListJson);
-const issuer = ref(LOCAL_KEYCLOAK_ISSUER);
+const issuer = ref(localIssuer.value);
 const clientId = ref('basyx-ui');
 const importMode = ref('if_missing');
 const managementApi = ref(false);
@@ -285,7 +303,7 @@ function onEnabledChanged(value: boolean | null): void {
 
 function onKeycloakSelected(value: boolean | null): void {
   if (value) {
-    issuer.value = LOCAL_KEYCLOAK_ISSUER;
+    issuer.value = localIssuer.value;
     trustListJson.value = defaultTrustList(issuer.value);
   }
 }
@@ -320,7 +338,7 @@ function syncFromCompose(): void {
   const infrastructures = config?.infrastructures;
   const infra = infrastructures?.[String(infrastructures.default)] as
     { security?: { config?: { issuer?: string; clientId?: string } } } | undefined;
-  issuer.value = infra?.security?.config?.issuer || LOCAL_KEYCLOAK_ISSUER;
+  issuer.value = infra?.security?.config?.issuer || localIssuer.value;
   clientId.value = infra?.security?.config?.clientId || 'basyx-ui';
   if (appStore.trustListJson === defaultTrustList()) {
     trustListJson.value = defaultTrustList(issuer.value);
@@ -329,9 +347,19 @@ function syncFromCompose(): void {
 
 function updateDefaultTrustList(newIssuer: string): void {
   try {
-    const entries = JSON.parse(trustListJson.value) as { issuer: string; audience: string }[];
-    if (entries.length === 1 && entries[0]?.audience === 'discovery-service') {
-      entries[0].issuer = newIssuer;
+    const entries = JSON.parse(trustListJson.value) as {
+      issuer: string;
+      audience: string;
+      discoveryUrl?: string;
+    }[];
+    const entry = entries[0];
+    if (entries.length === 1 && entry?.audience === LOCAL_KEYCLOAK_AUDIENCE) {
+      entry.issuer = newIssuer;
+      if (
+        newIssuer !== LOCAL_KEYCLOAK_TLS_ISSUER &&
+        entry.discoveryUrl === LOCAL_KEYCLOAK_DISCOVERY_URL
+      )
+        delete entry.discoveryUrl;
       trustListJson.value = JSON.stringify(entries, null, 2);
     }
   } catch {
@@ -395,7 +423,7 @@ function applySettings(): void {
           local: Boolean(getComposeServices()?.db),
         })
       : {},
-    ['keycloak']
+    ['keycloak', 'keycloak-certificate']
   );
   const config = appStore.getDockerComposeConfig;
   if (config?.value && typeof config.value === 'object' && 'services' in config.value) {
@@ -441,6 +469,7 @@ function applySettings(): void {
       : { type: 'none' };
     appStore.setBasyxInfraConfig(updated);
   }
+  appStore.syncLocalKeycloakForMcp();
   appliedSignature.value = settingsSignature.value;
 }
 

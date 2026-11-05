@@ -11,7 +11,12 @@ import {
   rabbitmqDefinitions,
   TEMPO_CONFIG,
 } from '@/utils/localStacks';
-import { createLocalRealm, LOCAL_REBAC_ADMIN_GROUP } from '@/utils/securitySetup';
+import {
+  createLocalRealm,
+  LOCAL_KEYCLOAK_CERTIFICATE,
+  LOCAL_REBAC_ADMIN_GROUP,
+  localKeycloakIssuer,
+} from '@/utils/securitySetup';
 
 export interface SetupAssets {
   services: Record<string, ComposeService>;
@@ -54,13 +59,40 @@ export function addOptionalSetupAssets(zip: JSZip, setup: SetupAssets): string {
   if (!services.keycloak) return '';
   if (!setup.adminPassword)
     throw new Error('A unique Keycloak administrator password is required.');
+  const tls = environment.MCP_ENABLED === 'true';
   zip.file(
     'keycloak/realm/basyx-realm.json',
-    createLocalRealm(setup.adminPassword, setup.uiUrl, setup.uiClientId)
+    createLocalRealm(setup.adminPassword, setup.uiUrl, setup.uiClientId, tls)
   );
   const rebacNote =
     environment.REBAC_ENABLED === 'true'
       ? ` \`basyx-admin\` is a member of the \`${LOCAL_REBAC_ADMIN_GROUP}\` group. Add users to this group to make them ReBAC administrators, or to other groups to share resources with them.`
       : '';
-  return `\n## Local Keycloak\n\nOpen http://keycloak.localhost:8080 and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately.${rebacNote} This local identity provider is for development only.\n`;
+  const keycloakUrl = new URL(localKeycloakIssuer(tls)).origin;
+  return `\n## Local Keycloak\n\nOpen ${keycloakUrl} and sign in as \`basyx-admin\` with the temporary password \`${setup.adminPassword}\`. Change it immediately.${rebacNote} This local identity provider is for development only.\n${tls ? keycloakCertificateReadme() : ''}`;
+}
+
+function keycloakCertificateReadme(): string {
+  return `
+### Trust the Keycloak Certificate
+
+MCP clients only open sign-in pages served over HTTPS, so Keycloak serves HTTPS on port 8443 and
+the Web UI signs in there as well. On the first start, the \`keycloak-certificate\` service creates a
+self-signed certificate for \`keycloak.localhost\` in \`keycloak/tls/\`. Trust it once so that browsers
+and MCP clients accept it. On macOS, trust it for TLS only:
+
+\`\`\`
+security add-trusted-cert -r trustRoot -p ssl -k ~/Library/Keychains/login.keychain-db ${LOCAL_KEYCLOAK_CERTIFICATE}
+\`\`\`
+
+Remove the trust again when you no longer need this setup:
+
+\`\`\`
+security remove-trusted-cert ${LOCAL_KEYCLOAK_CERTIFICATE}
+\`\`\`
+
+On other systems, add \`${LOCAL_KEYCLOAK_CERTIFICATE}\` to the system or browser trust store. To create a
+new certificate, delete \`keycloak/tls/\` and start the stack again. The AAS Environment reads Keycloak's
+keys over the Docker network and does not need the certificate.
+`;
 }

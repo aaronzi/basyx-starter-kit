@@ -218,6 +218,23 @@ describe('download with optional Telegraf', () => {
     wrapper.unmount();
   });
 
+  it('documents the MCP endpoint and its client commands', async () => {
+    const store = useAppStore();
+    store.updateTimeSeriesData(false);
+    store.updateServiceEnvironment('aas-environment', { MCP_ENABLED: 'true' });
+    const generate = vi.spyOn(JSZip.prototype, 'generateAsync').mockResolvedValue(new Blob());
+
+    const wrapper = await download();
+
+    expect(wrapper.text()).toContain('codex mcp add basyx --url http://localhost:8082/mcp');
+    const zip = generate.mock.contexts[0] as JSZip;
+    const readme = await zip.file('README.md')?.async('string');
+    expect(readme).toContain('## MCP Endpoint (experimental)');
+    expect(readme).toContain('claude mcp add --transport http basyx http://localhost:8082/mcp');
+    expect(readme).toContain('has no authentication');
+    wrapper.unmount();
+  });
+
   it('bundles the BaSyx database server template when pgAdmin is included', async () => {
     const store = useAppStore();
     store.updateTimeSeriesData(false);

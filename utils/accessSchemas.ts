@@ -51,6 +51,11 @@ export const trustListSchema = {
     properties: {
       issuer: { type: 'string', minLength: 1, description: 'OIDC issuer URL in accepted tokens.' },
       audience: { type: 'string', minLength: 1, description: 'Accepted token audience.' },
+      discoveryUrl: {
+        type: 'string',
+        minLength: 1,
+        description: 'Optional OIDC discovery URL used by BaSyx instead of the issuer URL.',
+      },
       scopes: { type: 'array', items: { type: 'string' } },
     },
     required: ['issuer', 'audience'],

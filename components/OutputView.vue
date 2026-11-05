@@ -107,21 +107,23 @@
                   </v-card-item>
                   <v-divider />
                   <v-card-text class="pt-4">
-                    <div
-                      v-for="entry in section.entries"
-                      :key="`${section.id}-${entry.key}`"
-                      class="d-flex align-center justify-space-between ga-3 mb-2"
-                    >
-                      <span class="text-caption text-medium-emphasis">{{ entry.key }}</span>
-                      <v-chip
-                        size="small"
-                        density="comfortable"
-                        :color="entry.color || 'primary'"
-                        variant="tonal"
-                      >
-                        {{ entry.value }}
-                      </v-chip>
-                    </div>
+                    <template v-for="entry in section.entries" :key="`${section.id}-${entry.key}`">
+                      <div v-if="entry.code" class="mb-2">
+                        <span class="text-caption text-medium-emphasis">{{ entry.key }}</span>
+                        <code class="d-block summary-code">{{ entry.value }}</code>
+                      </div>
+                      <div v-else class="d-flex align-center justify-space-between ga-3 mb-2">
+                        <span class="text-caption text-medium-emphasis">{{ entry.key }}</span>
+                        <v-chip
+                          size="small"
+                          density="comfortable"
+                          :color="entry.color || 'primary'"
+                          variant="tonal"
+                        >
+                          {{ entry.value }}
+                        </v-chip>
+                      </div>
+                    </template>
                   </v-card-text>
                 </v-card>
               </v-col>
@@ -136,6 +138,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useAppStore } from '@/stores/app';
+import { mcpClientCommands, type McpSignIn, readMcpSettings } from '@/utils/mcp';
 
 interface TreeItem {
   id: string;
@@ -158,6 +161,7 @@ interface SummaryEntry {
   key: string;
   value: string;
   color?: string;
+  code?: boolean;
 }
 
 interface SummarySection {
@@ -308,6 +312,8 @@ function getTreeIcon(item: TreeItem): string {
       return 'mdi-chart-timeline-variant-shimmer';
     case 'ovw-aas-environment-security':
       return 'mdi-shield-lock-outline';
+    case 'ovw-aas-environment-mcp':
+      return 'mdi-robot-outline';
     case 'ovw-postgres-summary':
       return 'mdi-database-cog-outline';
     case 'ovw-basyx-configuration-summary':
@@ -506,24 +512,29 @@ function buildAasEnvironmentSummary(nodeId: string): SummaryPayload {
     ],
   };
 
+  const mcpSection = buildMcpSection(env, services);
+
   const sections =
-    nodeId === 'ovw-aas-environment-integrations'
-      ? [integrationSection]
-      : nodeId === 'ovw-aas-environment-security'
-        ? [securitySection]
-        : nodeId === 'ovw-aas-environment-history'
-          ? [historySection]
-          : nodeId === 'ovw-aas-environment-observability'
-            ? [observabilitySection]
-            : nodeId === 'ovw-aas-environment-summary'
-              ? [runtimeSection]
-              : [
-                  runtimeSection,
-                  integrationSection,
-                  securitySection,
-                  historySection,
-                  observabilitySection,
-                ];
+    nodeId === 'ovw-aas-environment-mcp'
+      ? [mcpSection]
+      : nodeId === 'ovw-aas-environment-integrations'
+        ? [integrationSection]
+        : nodeId === 'ovw-aas-environment-security'
+          ? [securitySection]
+          : nodeId === 'ovw-aas-environment-history'
+            ? [historySection]
+            : nodeId === 'ovw-aas-environment-observability'
+              ? [observabilitySection]
+              : nodeId === 'ovw-aas-environment-summary'
+                ? [runtimeSection]
+                : [
+                    runtimeSection,
+                    integrationSection,
+                    securitySection,
+                    historySection,
+                    observabilitySection,
+                    mcpSection,
+                  ];
 
   return {
     icon: 'mdi-server-outline',
@@ -531,6 +542,43 @@ function buildAasEnvironmentSummary(nodeId: string): SummaryPayload {
       'Quick operational overview of the AAS Environment including integration and security status.',
     sections,
   };
+}
+
+const MCP_SIGN_IN_LABELS: Record<McpSignIn, string> = {
+  none: 'None (access control off)',
+  'local-keycloak': 'Local Keycloak (HTTPS)',
+  external: 'External identity provider',
+};
+
+function buildMcpSection(
+  env: Record<string, string>,
+  services: Record<string, DockerService>
+): SummarySection {
+  const settings = readMcpSettings(env, services);
+  const entries: SummaryEntry[] = [
+    {
+      key: 'MCP endpoint (experimental)',
+      value: boolChip(env.MCP_ENABLED).value,
+      color: boolChip(env.MCP_ENABLED).color,
+    },
+  ];
+  if (settings.enabled) {
+    entries.push(
+      {
+        key: 'Write tools',
+        value: boolChip(env.MCP_WRITESENABLED).value,
+        color: settings.writesEnabled ? 'warning' : 'success',
+      },
+      { key: 'Sign-in', value: MCP_SIGN_IN_LABELS[settings.signIn] },
+      { key: 'MCP URL', value: settings.url, code: true },
+      ...mcpClientCommands(settings.url).map(({ client, command }) => ({
+        key: client,
+        value: command,
+        code: true,
+      }))
+    );
+  }
+  return { id: 'aas-env-mcp', title: 'MCP Endpoint', icon: 'mdi-robot-outline', entries };
 }
 
 function buildPostgresSummary(): SummaryPayload {
@@ -791,3 +839,10 @@ watch(
   { immediate: true }
 );
 </script>
+
+<style scoped>
+.summary-code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+</style>

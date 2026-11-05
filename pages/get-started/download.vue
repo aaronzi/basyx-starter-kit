@@ -29,6 +29,24 @@
       </v-row>
     </v-alert>
 
+    <template v-if="mcpSettings.enabled">
+      <p class="text-normalText mt-3 mb-2 text-subtitle-1">
+        Connect an MCP client to the experimental MCP endpoint at
+        <code class="text-subheader">{{ mcpSettings.url }}</code
+        >:
+      </p>
+      <v-alert color="primary" variant="outlined" class="bg-alertCard mb-8">
+        <div v-for="item in mcpCommands" :key="item.client" class="mb-1">
+          <span class="text-caption text-medium-emphasis">{{ item.client }}</span>
+          <code class="d-block text-subheader font-weight-medium">{{ item.command }}</code>
+        </div>
+        <p v-if="mcpSettings.signIn === 'local-keycloak'" class="text-body-2 mt-3 mb-0">
+          Trust the generated Keycloak certificate first, as described in the README. Then sign in
+          with <code>/mcp</code> in Claude Code or <code>codex mcp login basyx</code>.
+        </p>
+      </v-alert>
+    </template>
+
     <v-btn
       class="mb-8"
       variant="tonal"
@@ -84,6 +102,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useAppStore } from '@/stores/app';
 import { addAasSuiteAssets } from '@/utils/aasSuiteAssets';
 import { readServiceEnvironment } from '@/utils/dockerEnvironment';
+import { createMcpReadme, mcpClientCommands, readMcpSettings } from '@/utils/mcp';
 import { getComposeServices } from '@/utils/optionalServices';
 import { createPgAdminServersJson } from '@/utils/pgAdminServers';
 import { generateRsaPrivateKeyPem } from '@/utils/rsaKey';
@@ -124,6 +143,13 @@ const logoDarkStore = computed(() => appStore.getLogoDark);
 const iconStore = computed(() => appStore.getAppIcon);
 const telegrafConfigStore = computed(() => appStore.getTelegrafConf);
 const aasFilesStore = computed(() => appStore.getAasFiles);
+const mcpSettings = computed(() =>
+  readMcpSettings(
+    readServiceEnvironment(appStore.getDockerComposeConfig?.value),
+    getComposeServices() || {}
+  )
+);
+const mcpCommands = computed(() => mcpClientCommands(mcpSettings.value.url));
 const route = useRoute();
 
 function updateShareConfigLink(): void {
@@ -154,7 +180,9 @@ function createReadme(): void {
       aasEnvironmentContextPath: appStore.getContextPath('aas-environment'),
       aasUiExternalPort: appStore.getContainerPort('aas-ui'),
       aasUiBasePath: appStore.getContextPath('aas-ui'),
-    }) + additionalServicesNote;
+    }) +
+    createMcpReadme(mcpSettings.value) +
+    additionalServicesNote;
 }
 
 async function downloadAsZip(): Promise<void> {

@@ -50,4 +50,36 @@ describe.skipIf(!dockerAvailable)('Docker Compose output', () => {
       expect(result.status, result.stderr).toBe(0);
     });
   }
+
+  it('accepts the HTTPS Keycloak used for MCP sign-in', () => {
+    useAppStore().updateServiceEnvironment('aas-environment', {
+      ABAC_ENABLED: 'true',
+      MCP_ENABLED: 'true',
+    });
+    updateOptionalServices(
+      localKeycloakService(
+        {
+          host: 'db',
+          port: '5432',
+          name: 'basyxTestDB',
+          user: 'admin',
+          password: 'admin123',
+          local: true,
+        },
+        true
+      ),
+      ['keycloak', 'keycloak-certificate']
+    );
+    const compose = yaml.dump(useAppStore().getDockerComposeConfig?.value);
+    const result = spawnSync('docker', ['compose', '-f', '-', 'config', '--format', 'json'], {
+      input: compose,
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const services = JSON.parse(result.stdout).services;
+    expect(services.keycloak.depends_on['keycloak-certificate'].condition).toBe(
+      'service_completed_successfully'
+    );
+    expect(services['keycloak-certificate'].command[0]).toContain('keytool -genkeypair');
+  });
 });

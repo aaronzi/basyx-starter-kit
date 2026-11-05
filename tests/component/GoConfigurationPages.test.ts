@@ -51,6 +51,8 @@ const globalStubs = {
   'v-expansion-panels': { template: '<div><slot /></div>' },
   'v-expansion-panel': { template: '<section><slot /></section>' },
   'v-expansion-panel-text': { template: '<div><slot /></div>' },
+  'v-expansion-panel-title': { template: '<div><slot /></div>' },
+  'v-chip': { template: '<span><slot /></span>' },
   'v-text-field': InputStub,
   'v-textarea': InputStub,
   SchemaJsonEditor: InputStub,
@@ -516,6 +518,105 @@ describe('BaSyx Go configuration pages', () => {
     expect(environment().REBAC_ADMINISTRATORS).toBe(
       'http://keycloak.localhost:8080/realms/basyx|group:operators'
     );
+  });
+
+  it('enables the experimental MCP endpoint with writes off by default', async () => {
+    const wrapper = mount(RuntimePage, { global: { stubs: globalStubs } });
+    expect(wrapper.text()).toContain('Experimental');
+    expect(environment()).toMatchObject({ MCP_ENABLED: 'false', MCP_WRITESENABLED: 'false' });
+
+    await wrapper.find('input[data-label="Enable MCP endpoint"]').setValue(true);
+    await applyButton(wrapper, 'Apply Runtime Settings')?.trigger('click');
+    await nextTick();
+    expect(environment()).toMatchObject({ MCP_ENABLED: 'true', MCP_WRITESENABLED: 'false' });
+    expect(wrapper.text()).toContain(
+      'claude mcp add --transport http basyx http://localhost:8082/mcp'
+    );
+    expect(wrapper.text()).toContain('codex mcp add basyx --url http://localhost:8082/mcp');
+
+    await wrapper.find('input[data-label="Offer MCP write tools"]').setValue(true);
+    await applyButton(wrapper, 'Apply Runtime Settings')?.trigger('click');
+    await nextTick();
+    expect(environment().MCP_WRITESENABLED).toBe('true');
+
+    await wrapper.find('input[data-label="Enable MCP endpoint"]').setValue(false);
+    await applyButton(wrapper, 'Apply Runtime Settings')?.trigger('click');
+    await nextTick();
+    expect(environment()).toMatchObject({ MCP_ENABLED: 'false', MCP_WRITESENABLED: 'false' });
+  });
+
+  it('moves the local Keycloak to HTTPS for MCP sign-in and back when MCP is disabled', async () => {
+    const runtime = mount(RuntimePage, { global: { stubs: globalStubs } });
+    await runtime.find('input[data-label="Enable MCP endpoint"]').setValue(true);
+    await applyButton(runtime, 'Apply Runtime Settings')?.trigger('click');
+    await nextTick();
+
+    const accessControl = mount(AccessControlPage, { global: { stubs: globalStubs } });
+    await accessControl.find('input[data-label="Enable access control"]').setValue(true);
+    await accessControl.find('input[data-label="Enable resource sharing (ReBAC)"]').setValue(true);
+    await nextTick();
+    expect(accessControl.text()).toContain('https://keycloak.localhost:8443/realms/basyx');
+    await applyButton(accessControl, 'Apply Access Control Settings')?.trigger('click');
+    await nextTick();
+
+    const store = useAppStore();
+    const services = (): Record<string, { environment?: Record<string, string> }> =>
+      (store.getDockerComposeConfig?.value as { services: Record<string, never> }).services;
+    const infraIssuer = (): string =>
+      (
+        store.getBasyxInfraConfig?.value as {
+          infrastructures: { infra1: { security: { config: { issuer: string } } } };
+        }
+      ).infrastructures.infra1.security.config.issuer;
+    expect(services()['keycloak-certificate']).toBeDefined();
+    expect(services().keycloak?.environment?.KC_HOSTNAME).toBe('https://keycloak.localhost:8443');
+    expect(JSON.parse(store.trustListJson)[0]).toMatchObject({
+      issuer: 'https://keycloak.localhost:8443/realms/basyx',
+      discoveryUrl: 'http://keycloak.localhost:8080/realms/basyx/.well-known/openid-configuration',
+      audience: 'discovery-service',
+    });
+    expect(infraIssuer()).toBe('https://keycloak.localhost:8443/realms/basyx');
+    expect(environment().REBAC_ADMINISTRATORS).toBe(
+      'https://keycloak.localhost:8443/realms/basyx|group:basyx-admins'
+    );
+
+    await runtime.find('input[data-label="Enable MCP endpoint"]').setValue(false);
+    await applyButton(runtime, 'Apply Runtime Settings')?.trigger('click');
+    await nextTick();
+    expect(services()['keycloak-certificate']).toBeUndefined();
+    expect(services().keycloak?.environment?.KC_HOSTNAME).toBe('keycloak.localhost');
+    expect(JSON.parse(store.trustListJson)[0].issuer).toBe(
+      'http://keycloak.localhost:8080/realms/basyx'
+    );
+    expect(JSON.parse(store.trustListJson)[0].discoveryUrl).toBeUndefined();
+    expect(infraIssuer()).toBe('http://keycloak.localhost:8080/realms/basyx');
+    expect(environment().REBAC_ADMINISTRATORS).toBe(
+      'http://keycloak.localhost:8080/realms/basyx|group:basyx-admins'
+    );
+  });
+
+  it('drops the local discovery URL when MCP uses an external identity provider', async () => {
+    useAppStore().updateServiceEnvironment('aas-environment', { MCP_ENABLED: 'true' });
+    const wrapper = mount(AccessControlPage, { global: { stubs: globalStubs } });
+    await wrapper.find('input[data-label="Enable access control"]').setValue(true);
+    await wrapper.find('input[data-label="Include local Keycloak container"]').setValue(false);
+    await wrapper
+      .find('input[data-label="OIDC issuer URL"]')
+      .setValue('https://id.example.test/realms/basyx');
+    await nextTick();
+    expect(wrapper.text()).toContain('dynamic client registration');
+    await applyButton(wrapper, 'Apply Access Control Settings')?.trigger('click');
+    await nextTick();
+    const services = (useAppStore().getDockerComposeConfig?.value as { services: object }).services;
+    expect(services).not.toHaveProperty('keycloak');
+    expect(services).not.toHaveProperty('keycloak-certificate');
+    expect(JSON.parse(useAppStore().trustListJson)).toEqual([
+      {
+        issuer: 'https://id.example.test/realms/basyx',
+        audience: 'discovery-service',
+        scopes: ['email', 'profile'],
+      },
+    ]);
   });
 
   it('removes ReBAC when access control is disabled', async () => {
